@@ -1,19 +1,11 @@
 # %%
-import pathlib
-import datetime
 import itertools
 import math
 from typing import Any, Tuple
-
-from tqdm import tqdm
 import pandas as pd
 
 
 def main() -> None:
-    # dir_path = pathlib.Path(datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
-    # if not dir_path.exists():
-    #     dir_path.mkdir()
-
     # setting parameters
     df = set_parameters()
     df["num_cell"] = -1
@@ -22,8 +14,8 @@ def main() -> None:
     df["cell_area"] = -1.0
     df["ratio_area"] = -1.0
 
-    for num in tqdm(range(len(df))):
-        # make obj
+    for num in range(len(df)):
+        # make case
         case = Case(
             diameter_cell=df.loc[num, "diameter_cell"],
             diameter_product=df.loc[num, "diameter_product"],
@@ -75,9 +67,6 @@ def main() -> None:
             case.t_mid,
             case.t_top,
         )
-
-    # export conditions
-    # df.to_csv(str(dir_path) + "\\data.csv")
 
     return None
 
