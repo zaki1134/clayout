@@ -1,0 +1,21 @@
+{
+    // editor
+    "editor.rulers": [
+        120
+    ],
+    "editor.formatOnSave": true,
+    // python
+    "python.formatting.provider": "black",
+    "python.linting.flake8Enabled": true,
+    "python.linting.enabled": true,
+    "python.linting.pylintEnabled": false,
+    "python.linting.lintOnSave": true,
+    "python.linting.flake8Args": [
+        "--max-line-length=120",
+        "--ignore=E203,W503,W504"
+    ],
+    "python.formatting.blackArgs": [
+        "--line-length=120"
+    ],
+    "autoDocstring.docstringFormat": "numpy",
+}
