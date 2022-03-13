@@ -23,67 +23,88 @@ def main():
 
     # set parameters
     df = set_parameters()
+    df.to_csv(dir_path / "data.csv")
 
     for num in range(len(df)):
-        # make case
-        case = Case(
-            diameter_cell=df.loc[num, "diameter_cell"],
-            diameter_product=df.loc[num, "diameter_product"],
-            thickness_rib=df.loc[num, "thickness_rib"],
-            thickness_slit=df.loc[num, "thickness_slit"],
-            thickness_product=df.loc[num, "thickness_product"],
-            ratio_slit=df.loc[num, "ratio_slit"],
-            mode_cell=df.loc[num, "mode_cell"],
-            mode_slit=df.loc[num, "mode_slit"],
-            thickness_bot=df.loc[num, "thickness_bot"],
-            thickness_mid=df.loc[num, "thickness_mid"],
-            thickness_top=df.loc[num, "thickness_top"],
-            length_product=df.loc[num, "length_product"],
-            ocell_rib=df.loc[num, "ocell_rib"],
-            ocell_hight=df.loc[num, "ocell_hight"],
-            ocell_x1=df.loc[num, "ocell_x1"],
-            ocell_y1=df.loc[num, "ocell_y1"],
+        # temporary parameters
+        pitch_cell = df.loc[num, "diameter_icell"] + df.loc[num, "thickness_rib"]
+        y_cell_cell = pitch_cell * np.sin(np.pi / 3.0)
+        pitch_slit = (
+            df.loc[num, "thickness_slit"]
+            + (df.loc[num, "ratio_slit"] - 1) * y_cell_cell
+            + df.loc[num, "diameter_icell"]
+            + 2.0 * df.loc[num, "thickness_rib"]
+        )
+        lim_slit = (
+            0.5 * df.loc[num, "diameter_prod"]
+            - df.loc[num, "thickness_prod"]
+            - df.loc[num, "diameter_icell"]
+            - df.loc[num, "thickness_rib"]
+            - 0.5 * df.loc[num, "thickness_slit"]
+        )
+        y_cell_slit = (
+            0.5 * df.loc[num, "thickness_slit"] + df.loc[num, "thickness_rib"] + 0.5 * df.loc[num, "diameter_icell"]
         )
 
         # set base slit positions
-        positions_bslit = set_pos_slit(case.p_slit, case.d_prod, case.m_slit)
+        positions_bslit = set_pos_slit(pitch_slit, df.loc[num, "diameter_prod"], df.loc[num, "mode_slit"])
 
         # set base cell positions
         positions_bicell, positions_bocell = set_pos_cell(
             positions_bslit,
-            case.p_cell,
-            0.6 * case.d_prod,
-            case.y_cell_slit,
-            case.y_cell_cell,
-            case.r_slit,
-            case.m_cell,
+            pitch_cell,
+            0.6 * df.loc[num, "diameter_prod"],
+            lim_slit,
+            y_cell_slit,
+            y_cell_cell,
+            df.loc[num, "ratio_slit"],
+            df.loc[num, "mode_cell"],
         )
 
         # select slit
-        positions_slit = select_slit(positions_bslit, case.lim_slit)
+        positions_slit = select_slit(positions_bslit, lim_slit)
 
         # select cell
-        lim_icell = 0.5 * case.d_prod - case.t_prod - 0.5 * case.d_cell
-        lim_ocell = 0.5 * case.d_prod - case.t_prod - 0.5 * (case.p_cell - case.o_rib)
+        lim_icell = (
+            0.5 * df.loc[num, "diameter_prod"] - df.loc[num, "thickness_prod"] - 0.5 * df.loc[num, "diameter_icell"]
+        )
+        lim_ocell = (
+            0.5 * df.loc[num, "diameter_prod"]
+            - df.loc[num, "thickness_prod"]
+            - 0.5 * (pitch_cell - df.loc[num, "thickness_rib_ocell"])
+        )
         positions_icell = select_cell(positions_bicell, lim_icell)
         positions_ocell = select_cell(positions_bocell, lim_ocell)
 
         # calc value
-        effective_diameter_cell = case.d_cell - 2.0 * (case.t_bot + case.t_mid + case.t_top)
         num_icell = len(positions_icell)
         num_ocell = len(positions_ocell)
-        df.loc[num, "num_icell"] = num_icell
-        df.loc[num, "num_ocell"] = num_ocell
-        df.loc[num, "num_slit"] = len(positions_slit)
-        df.loc[num, "membrane_area"] = np.pi * effective_diameter_cell * case.length * num_icell
+        df.loc[num, "N_icell"] = num_icell
+        df.loc[num, "N_ocell"] = num_ocell
+        df.loc[num, "N_slit"] = len(positions_slit)
 
+        effective_diameter_cell = df.loc[num, "diameter_icell"] - 2.0 * (
+            df.loc[num, "thickness_bot"] + df.loc[num, "thickness_mid"] + df.loc[num, "thickness_top"]
+        )
         icell_area = 0.25 * np.pi * (effective_diameter_cell ** 2.0) * num_icell
-        ocell_area = (case.o_hight * (case.p_cell - case.o_rib) - 2.0 * case.o_x1 * case.o_y1) * num_ocell
-        prod_area = 0.25 * np.pi * (case.d_prod ** 2.0)
-        df.loc[num, "icell_area"] = icell_area
-        df.loc[num, "ocell_area"] = ocell_area
-        df.loc[num, "icell_area_prod_area"] = icell_area / prod_area
-        df.loc[num, "ocell_area_prod_area"] = ocell_area / prod_area
+        ocell_area = (
+            df.loc[num, "hight_ocell"] * (pitch_cell - df.loc[num, "thickness_rib_ocell"])
+            - 2.0 * df.loc[num, "width_x1_ocell"] * df.loc[num, "hight_y1_ocell"]
+        ) * num_ocell
+        prod_area = 0.25 * np.pi * (df.loc[num, "diameter_prod"] ** 2.0)
+        df.loc[num, "A_membrane"] = np.pi * effective_diameter_cell * df.loc[num, "length_prod"] * num_icell
+        df.loc[num, "A_icell"] = icell_area
+        df.loc[num, "A_ocell"] = ocell_area
+        df.loc[num, "A_icell_A_prod"] = icell_area / prod_area
+        df.loc[num, "A_ocell_A_prod"] = ocell_area / prod_area
+
+        prod_vol = prod_area * df.loc[num, "length_prod"]
+        df.loc[num, "V_icell"] = icell_area * df.loc[num, "length_prod"]
+        df.loc[num, "V_ocell"] = ocell_area * (
+            df.loc[num, "length_prod"] - 2.0 * (df.loc[num, "length_slit"] + df.loc[num, "length_seal"])
+        )
+        df.loc[num, "V_icell_V_prod"] = df.loc[num, "V_icell"] / prod_vol
+        df.loc[num, "V_ocell_V_prod"] = df.loc[num, "V_ocell"] / prod_vol
 
         # data output
         cnt_str = f"index{num:0>4}"
@@ -92,11 +113,10 @@ def main():
         np.savetxt(dir_pos / f"{cnt_str}_slit.csv", np.round(positions_slit, decimals=15), fmt="%.14e", delimiter=",")
 
         parameters = df.iloc[num, :].T.to_dict()
+        dump_json(parameters, dir_pos / f"{cnt_str}_param.json")
         draw(parameters, positions_icell, positions_ocell, positions_slit, dir_path / cnt_str)
-        df.to_csv(dir_path / "data.csv")
 
         del (
-            case,
             positions_bslit,
             positions_slit,
             positions_bicell,
@@ -108,137 +128,47 @@ def main():
     return None
 
 
-class Case:
-    def __init__(
-        self,
-        diameter_cell: float,
-        diameter_product: float,
-        thickness_rib: float,
-        thickness_slit: float,
-        thickness_product: float,
-        thickness_bot: float,
-        thickness_mid: float,
-        thickness_top: float,
-        length_product: float,
-        ratio_slit: int,
-        mode_cell: str,
-        mode_slit: str,
-        ocell_rib: float,
-        ocell_hight: float,
-        ocell_x1: float,
-        ocell_y1: float,
-    ):
-        self.d_cell = diameter_cell
-        self.d_prod = diameter_product
-        self.t_rib = thickness_rib
-        self.t_slit = thickness_slit
-        self.t_prod = thickness_product
-        self.t_bot = thickness_bot
-        self.t_mid = thickness_mid
-        self.t_top = thickness_top
-        self.length = length_product
-        self.r_slit = ratio_slit
-        self.m_cell = mode_cell
-        self.m_slit = mode_slit
-        self.o_rib = ocell_rib
-        self.o_hight = ocell_hight
-        self.o_x1 = ocell_x1
-        self.o_y1 = ocell_y1
-
-        self.p_cell = self.d_cell + self.t_rib
-        self.y_cell_cell = self.p_cell * np.sin(np.pi / 3.0)
-        self.p_slit = self.t_slit + (self.r_slit - 1) * self.y_cell_cell + self.d_cell + 2.0 * self.t_rib
-        self.lim_slit = 0.5 * self.d_prod - self.t_prod - self.d_cell - self.t_rib - 0.5 * self.t_slit
-        self.y_cell_slit = 0.5 * self.t_slit + self.t_rib + 0.5 * self.d_cell
-
-
 def set_parameters():
     # unit : mm
-    # incell parameters
-    diameter_cell = [10.27]
-    diameter_product = [180.0]
-    thickness_rib = [1.7]
-    thickness_slit = [3.684]
-    thickness_product = [5.0]
-    thickness_bot = [250e-3]
-    thickness_mid = [20e-3]
-    thickness_top = [1e-3]
-    length_product = [1000.0]
-    ratio_slit = [2]
-    mode_cell = ["A"]
-    mode_slit = ["A"]
-    # outcell parameters
-    ocell_rib = [3.684 * 0.5]
-    ocell_hight = [1.8]
-    ocell_x1 = [0.8]
-    ocell_y1 = [0.3]
-    # calc value
-    num_icell = [-1]
-    num_ocell = [-1]
-    num_slit = [-1]
-    membrane_area = [-1.0]
-    icell_area = [-1.0]
-    ocell_area = [-1.0]
-    icell_area_prod_area = [-1.0]
-    ocell_area_prod_area = [-1.0]
+    param = {
+        # icell parameters
+        "diameter_icell": [4.0],
+        "diameter_prod": [30.0],
+        "thickness_rib": [0.5],
+        "thickness_slit": [1.0],
+        "thickness_prod": [1.0],
+        "thickness_bot": [250e-3],
+        "thickness_mid": [20e-3],
+        "thickness_top": [1e-3],
+        "length_prod": [1000.0],
+        "length_slit": [30.0],
+        "length_seal": [40.0],
+        "ratio_slit": [2],
+        "mode_cell": ["A", "B"],
+        "mode_slit": ["A", "B"],
+        # ocell parameters
+        "thickness_rib_ocell": [0.5],
+        "hight_ocell": [1.0],
+        "width_x1_ocell": [0.0],
+        "hight_y1_ocell": [0.0],
+        # calc value
+        "N_icell": [-1],
+        "N_ocell": [-1],
+        "N_slit": [-1],
+        "A_membrane": [-1.0],
+        "A_icell": [-1.0],
+        "A_ocell": [-1.0],
+        "A_icell_A_prod": [-1.0],
+        "A_ocell_A_prod": [-1.0],
+        "V_icell": [-1.0],
+        "V_ocell": [-1.0],
+        "V_icell_V_prod": [-1.0],
+        "V_ocell_V_prod": [-1.0],
+    }
 
-    param_set = list(
-        itertools.product(
-            diameter_cell,
-            diameter_product,
-            thickness_rib,
-            thickness_slit,
-            thickness_product,
-            thickness_bot,
-            thickness_mid,
-            thickness_top,
-            length_product,
-            ratio_slit,
-            mode_cell,
-            mode_slit,
-            ocell_rib,
-            ocell_hight,
-            ocell_x1,
-            ocell_y1,
-            num_icell,
-            num_ocell,
-            num_slit,
-            membrane_area,
-            icell_area,
-            ocell_area,
-            icell_area_prod_area,
-            ocell_area_prod_area,
-        )
-    )
+    param_set = list(itertools.product(*param.values()))
 
-    title = [
-        "diameter_cell",
-        "diameter_product",
-        "thickness_rib",
-        "thickness_slit",
-        "thickness_product",
-        "thickness_bot",
-        "thickness_mid",
-        "thickness_top",
-        "length_product",
-        "ratio_slit",
-        "mode_cell",
-        "mode_slit",
-        "ocell_rib",
-        "ocell_hight",
-        "ocell_x1",
-        "ocell_y1",
-        "num_icell",
-        "num_ocell",
-        "num_slit",
-        "membrane_area",
-        "icell_area",
-        "ocell_area",
-        "icell_area_prod_area",
-        "ocell_area_prod_area",
-    ]
-
-    return pd.DataFrame(param_set, columns=title)
+    return pd.DataFrame(param_set, columns=[k for k in param.keys()])
 
 
 def set_pos_slit(s_pitch: float, s_lim: float, s_mode: str):
@@ -265,10 +195,18 @@ def set_pos_slit(s_pitch: float, s_lim: float, s_mode: str):
 
 
 def set_pos_cell(
-    pos_slit: list, c_pitch: float, c_lim: float, cs_pitch: float, cc_pitch: float, r_slit: int, c_mode: str
+    pos_slit: list,
+    c_pitch: float,
+    c_lim: float,
+    s_lim: float,
+    cs_pitch: float,
+    cc_pitch: float,
+    r_slit: int,
+    c_mode: str,
 ):
     icell = []
     ocell = []
+    filter_ocell = []
 
     # x-coord preset
     cnt_x = int(np.ceil(c_lim / c_pitch))
@@ -313,7 +251,9 @@ def set_pos_cell(
 
             cnt += 1
 
-    return np.array(icell), np.array(ocell)
+    [filter_ocell.append([xy[0], xy[1]]) for xy in ocell if abs(xy[1]) < s_lim]
+
+    return np.array(icell), np.array(filter_ocell)
 
 
 def select_slit(bslit: list, s_lim: float):
@@ -395,27 +335,27 @@ def draw(param: dict, pos_icell: list, pos_ocell: list, pos_slit: list, fpath: s
         return None
 
     # make fig, ax
-    fig = plt.figure(figsize=(8, 5))
+    fig = plt.figure(figsize=(10, 6))
     spec = GridSpec(ncols=2, nrows=1, width_ratios=[2, 1])
 
     ax = fig.add_subplot(spec[0])
     ax.grid(linewidth=0.2)
     ax.set_axisbelow(True)
 
-    aaa = 0.5 * param["diameter_product"] + 10.0
+    aaa = 0.52 * param["diameter_prod"]
     ax.set_xlim(-aaa, aaa)
     ax.set_ylim(-aaa, aaa)
 
     # draw product
-    draw_circle(ax, radius=0.5 * param["diameter_product"])
-    draw_circle(ax, radius=(0.5 * param["diameter_product"] - param["thickness_product"]), linestyle="dashed")
+    draw_circle(ax, radius=0.5 * param["diameter_prod"])
+    draw_circle(ax, radius=(0.5 * param["diameter_prod"] - param["thickness_prod"]), linestyle="dashed")
 
     # draw slit
-    draw_slit(ax, pos_slit, param["thickness_slit"], param["diameter_product"])
+    draw_slit(ax, pos_slit, param["thickness_slit"], param["diameter_prod"])
 
     # draw icell
     for _ in pos_icell:
-        r_cell = 0.5 * param["diameter_cell"] - (
+        r_cell = 0.5 * param["diameter_icell"] - (
             param["thickness_bot"] + param["thickness_mid"] + param["thickness_top"]
         )
         ax.add_patch(patch.Circle(xy=_, radius=r_cell))
@@ -424,11 +364,11 @@ def draw(param: dict, pos_icell: list, pos_ocell: list, pos_slit: list, fpath: s
     for xy in pos_ocell:
         draw_ocell(
             ax,
-            param["diameter_cell"] + param["thickness_rib"],
-            param["ocell_rib"],
-            param["ocell_hight"],
-            param["ocell_x1"],
-            param["ocell_y1"],
+            param["diameter_icell"] + param["thickness_rib"],
+            param["thickness_rib_ocell"],
+            param["hight_ocell"],
+            param["width_x1_ocell"],
+            param["hight_y1_ocell"],
             (xy[0], xy[1]),
         )
 
@@ -436,15 +376,19 @@ def draw(param: dict, pos_icell: list, pos_ocell: list, pos_slit: list, fpath: s
     temp_str = []
     table_label = []
     for k, v in param.items():
-        if k in ["membrane_area", "icell_area", "ocell_area"]:
+        if k in ["A_membrane", "A_icell", "A_ocell"]:
             temp_str.append([f"{v:.3e} [mm2]"])
             table_label.append(k)
 
-        elif k in ["icell_area_prod_area", "ocell_area_prod_area"]:
+        elif k in ["V_icell", "V_ocell"]:
+            temp_str.append([f"{v:.3e} [mm3]"])
+            table_label.append(k)
+
+        elif k in ["A_icell_A_prod", "A_ocell_A_prod", "V_icell_V_prod", "V_ocell_V_prod"]:
             temp_str.append([f"{v*100.0:.3g} [%]"])
             table_label.append(k)
 
-        elif k in ["ratio_slit", "num_icell", "num_ocell", "num_slit"]:
+        elif k in ["ratio_slit", "N_icell", "N_ocell", "N_slit"]:
             temp_str.append([f"{v} [-]"])
             table_label.append(k)
 
@@ -458,7 +402,7 @@ def draw(param: dict, pos_icell: list, pos_ocell: list, pos_slit: list, fpath: s
 
     ay = fig.add_subplot(spec[1])
     ay.axis("off")
-    ay.table(cellText=temp_str, rowLabels=table_label, loc="center", bbox=[0.7, 0, 1, 1])
+    ay.table(cellText=temp_str, rowLabels=table_label, loc="center", bbox=[0.4, 0.0, 1.0, 1.0])
     # bbox = (xmin, ymin, width, height)
 
     # save fig
@@ -470,7 +414,7 @@ def draw(param: dict, pos_icell: list, pos_ocell: list, pos_slit: list, fpath: s
 
 def dump_json(data: dict, fname: str = "test_json", sw_sort: bool = False):
     with open(fname, "wt") as f:
-        json.dump(data, f, sort_keys=sw_sort, index=4)
+        json.dump(data, f, sort_keys=sw_sort, indent=4)
 
     return None
 
