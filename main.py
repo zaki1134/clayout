@@ -77,43 +77,17 @@ def main():
         positions_ocell = select_cell(positions_bocell, lim_ocell)
 
         # calc value
-        num_icell = len(positions_icell)
-        num_ocell = len(positions_ocell)
-        df.loc[num, "N_icell"] = num_icell
-        df.loc[num, "N_ocell"] = num_ocell
-        df.loc[num, "N_slit"] = len(positions_slit)
-
-        effective_diameter_cell = df.loc[num, "diameter_icell"] - 2.0 * (
-            df.loc[num, "thickness_bot"] + df.loc[num, "thickness_mid"] + df.loc[num, "thickness_top"]
-        )
-        icell_area = 0.25 * np.pi * (effective_diameter_cell ** 2.0) * num_icell
-        ocell_area = (
-            df.loc[num, "hight_ocell"] * (pitch_cell - df.loc[num, "thickness_rib_ocell"])
-            - 2.0 * df.loc[num, "width_x1_ocell"] * df.loc[num, "hight_y1_ocell"]
-        ) * num_ocell
-        prod_area = 0.25 * np.pi * (df.loc[num, "diameter_prod"] ** 2.0)
-        df.loc[num, "A_membrane"] = np.pi * effective_diameter_cell * df.loc[num, "length_prod"] * num_icell
-        df.loc[num, "A_icell"] = icell_area
-        df.loc[num, "A_ocell"] = ocell_area
-        df.loc[num, "A_icell_A_prod"] = icell_area / prod_area
-        df.loc[num, "A_ocell_A_prod"] = ocell_area / prod_area
-
-        prod_vol = prod_area * df.loc[num, "length_prod"]
-        df.loc[num, "V_icell"] = icell_area * df.loc[num, "length_prod"]
-        df.loc[num, "V_ocell"] = ocell_area * (
-            df.loc[num, "length_prod"] - 2.0 * (df.loc[num, "length_slit"] + df.loc[num, "length_seal"])
-        )
-        df.loc[num, "V_icell_V_prod"] = df.loc[num, "V_icell"] / prod_vol
-        df.loc[num, "V_ocell_V_prod"] = df.loc[num, "V_ocell"] / prod_vol
+        parameters = calc_value(df, num, pitch_cell, positions_icell, positions_ocell, positions_slit)
 
         # data output
         cnt_str = f"index{num:0>4}"
         np.savetxt(dir_pos / f"{cnt_str}_icell.csv", np.round(positions_icell, decimals=15), fmt="%.14e", delimiter=",")
         np.savetxt(dir_pos / f"{cnt_str}_ocell.csv", np.round(positions_ocell, decimals=15), fmt="%.14e", delimiter=",")
         np.savetxt(dir_pos / f"{cnt_str}_slit.csv", np.round(positions_slit, decimals=15), fmt="%.14e", delimiter=",")
-
-        parameters = df.iloc[num, :].T.to_dict()
         dump_json(parameters, dir_pos / f"{cnt_str}_param.json")
+
+        # darw
+        # parameters = df.iloc[num, :].T.to_dict()
         draw(parameters, positions_icell, positions_ocell, positions_slit, dir_path / cnt_str)
 
         del (
@@ -132,7 +106,7 @@ def set_parameters():
     # unit : mm
     param = {
         # icell parameters
-        "diameter_icell": [4.0],
+        "diameter_icell": [3.0],
         "diameter_prod": [30.0],
         "thickness_rib": [0.5],
         "thickness_slit": [1.0],
@@ -144,13 +118,13 @@ def set_parameters():
         "length_slit": [30.0],
         "length_seal": [40.0],
         "ratio_slit": [2],
-        "mode_cell": ["A", "B"],
-        "mode_slit": ["A", "B"],
+        "mode_cell": ["A"],
+        "mode_slit": ["A"],
         # ocell parameters
         "thickness_rib_ocell": [0.5],
         "hight_ocell": [1.0],
-        "width_x1_ocell": [0.0],
-        "hight_y1_ocell": [0.0],
+        "width_x1_ocell": [0.2],
+        "hight_y1_ocell": [0.2],
         # calc value
         "N_icell": [-1],
         "N_ocell": [-1],
@@ -158,12 +132,12 @@ def set_parameters():
         "A_membrane": [-1.0],
         "A_icell": [-1.0],
         "A_ocell": [-1.0],
-        "A_icell_A_prod": [-1.0],
-        "A_ocell_A_prod": [-1.0],
+        "R(A_icell/A_prod)": [-1.0],
+        "R(A_ocell/A_prod)": [-1.0],
         "V_icell": [-1.0],
         "V_ocell": [-1.0],
-        "V_icell_V_prod": [-1.0],
-        "V_ocell_V_prod": [-1.0],
+        "R(V_icell/V_prod)": [-1.0],
+        "R(V_ocell/V_prod)": [-1.0],
     }
 
     param_set = list(itertools.product(*param.values()))
@@ -270,6 +244,39 @@ def select_cell(bcell: list, c_lim: float):
     return np.array(result)
 
 
+def calc_value(df, num, p_cell, pos_icell, pos_ocell, pos_slit) -> dict:
+    num_icell = len(pos_icell)
+    num_ocell = len(pos_ocell)
+    df.loc[num, "N_icell"] = num_icell
+    df.loc[num, "N_ocell"] = num_ocell
+    df.loc[num, "N_slit"] = len(pos_slit)
+
+    effective_diameter_cell = df.loc[num, "diameter_icell"] - 2.0 * (
+        df.loc[num, "thickness_bot"] + df.loc[num, "thickness_mid"] + df.loc[num, "thickness_top"]
+    )
+    icell_area = 0.25 * np.pi * (effective_diameter_cell ** 2.0) * num_icell
+    ocell_area = (
+        df.loc[num, "hight_ocell"] * (p_cell - df.loc[num, "thickness_rib_ocell"])
+        - 2.0 * df.loc[num, "width_x1_ocell"] * df.loc[num, "hight_y1_ocell"]
+    ) * num_ocell
+    prod_area = 0.25 * np.pi * (df.loc[num, "diameter_prod"] ** 2.0)
+    df.loc[num, "A_membrane"] = np.pi * effective_diameter_cell * df.loc[num, "length_prod"] * num_icell
+    df.loc[num, "A_icell"] = icell_area
+    df.loc[num, "A_ocell"] = ocell_area
+    df.loc[num, "R(A_icell/A_prod)"] = icell_area / prod_area
+    df.loc[num, "R(A_ocell/A_prod)"] = ocell_area / prod_area
+
+    prod_vol = prod_area * df.loc[num, "length_prod"]
+    df.loc[num, "V_icell"] = icell_area * df.loc[num, "length_prod"]
+    df.loc[num, "V_ocell"] = ocell_area * (
+        df.loc[num, "length_prod"] - 2.0 * (df.loc[num, "length_slit"] + df.loc[num, "length_seal"])
+    )
+    df.loc[num, "R(V_icell/V_prod)"] = df.loc[num, "V_icell"] / prod_vol
+    df.loc[num, "R(V_ocell/V_prod)"] = df.loc[num, "V_ocell"] / prod_vol
+
+    return df.iloc[num, :].T.to_dict()
+
+
 def draw(param: dict, pos_icell: list, pos_ocell: list, pos_slit: list, fpath: str) -> None:
     def draw_circle(ax, radius: float, center: tuple = (0.0, 0.0), linestyle: str = "solid") -> None:
         theta = np.linspace(0.0, 2.0 * np.pi, 360)
@@ -327,10 +334,8 @@ def draw(param: dict, pos_icell: list, pos_ocell: list, pos_slit: list, fpath: s
 
         point.append([point[0][0], point[0][1]])
 
-        xxx = [point[i][0] for i in range(len(point))]
-        yyy = [point[i][1] for i in range(len(point))]
-
-        ax.plot(xxx, yyy, color="green", linewidth=0.5, linestyle="dashed")
+        poly = plt.Polygon(point, fc="green")
+        ax.add_patch(poly)
 
         return None
 
@@ -384,7 +389,7 @@ def draw(param: dict, pos_icell: list, pos_ocell: list, pos_slit: list, fpath: s
             temp_str.append([f"{v:.3e} [mm3]"])
             table_label.append(k)
 
-        elif k in ["A_icell_A_prod", "A_ocell_A_prod", "V_icell_V_prod", "V_ocell_V_prod"]:
+        elif k in ["R(A_icell/A_prod)", "R(A_ocell/A_prod)", "R(V_icell/V_prod)", "R(V_ocell/V_prod)"]:
             temp_str.append([f"{v*100.0:.3g} [%]"])
             table_label.append(k)
 
