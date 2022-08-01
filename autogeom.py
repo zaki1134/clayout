@@ -17,6 +17,11 @@ def main():
         elif "param" in k:
             param_set = read_csv(v)
 
+    # filter quarter
+    pos_i = [[xy[0], xy[1]] for xy in pos_i if xy[0] > -1.0 and xy[1] > -1.0]
+    pos_o = [[xy[0], xy[1]] for xy in pos_o if xy[0] > -1.0 and xy[1] > -1.0]
+    pos_s = [xy for xy in pos_s if xy > -1.0]
+
     # initialize
     _ = Selection.Create(DocumentHelper.GetAllDocObjects())
     if _.Count != 0:
