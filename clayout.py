@@ -43,11 +43,15 @@ def main():
             - 0.5 * df.loc[num, "thickness_slit"]
         )
         y_cell_slit = (
-            0.5 * df.loc[num, "thickness_slit"] + df.loc[num, "thickness_rib"] + 0.5 * df.loc[num, "diameter_icell"]
+            0.5 * df.loc[num, "thickness_slit"]
+            + df.loc[num, "thickness_rib"]
+            + 0.5 * df.loc[num, "diameter_icell"]
         )
 
         # set base slit positions
-        positions_bslit = set_pos_slit(pitch_slit, df.loc[num, "diameter_prod"], df.loc[num, "mode_slit"])
+        positions_bslit = set_pos_slit(
+            pitch_slit, df.loc[num, "diameter_prod"], df.loc[num, "mode_slit"]
+        )
 
         # set base cell positions
         positions_bicell, positions_bocell = set_pos_cell(
@@ -66,7 +70,9 @@ def main():
 
         # select cell
         lim_icell = (
-            0.5 * df.loc[num, "diameter_prod"] - df.loc[num, "thickness_prod"] - 0.5 * df.loc[num, "diameter_icell"]
+            0.5 * df.loc[num, "diameter_prod"]
+            - df.loc[num, "thickness_prod"]
+            - 0.5 * df.loc[num, "diameter_icell"]
         )
         lim_ocell = (
             0.5 * df.loc[num, "diameter_prod"]
@@ -77,18 +83,41 @@ def main():
         positions_ocell = select_cell(positions_bocell, lim_ocell)
 
         # calc value
-        parameters = calc_value(df, num, pitch_cell, positions_icell, positions_ocell, positions_slit)
+        parameters = calc_value(
+            df, num, pitch_cell, positions_icell, positions_ocell, positions_slit
+        )
 
         # data output
         cnt_str = f"index{num:0>4}"
-        np.savetxt(dir_pos / f"{cnt_str}_icell.csv", np.round(positions_icell, decimals=15), fmt="%.14e", delimiter=",")
-        np.savetxt(dir_pos / f"{cnt_str}_ocell.csv", np.round(positions_ocell, decimals=15), fmt="%.14e", delimiter=",")
-        np.savetxt(dir_pos / f"{cnt_str}_slit.csv", np.round(positions_slit, decimals=15), fmt="%.14e", delimiter=",")
+        np.savetxt(
+            dir_pos / f"{cnt_str}_icell.csv",
+            np.round(positions_icell, decimals=15),
+            fmt="%.14e",
+            delimiter=",",
+        )
+        np.savetxt(
+            dir_pos / f"{cnt_str}_ocell.csv",
+            np.round(positions_ocell, decimals=15),
+            fmt="%.14e",
+            delimiter=",",
+        )
+        np.savetxt(
+            dir_pos / f"{cnt_str}_slit.csv",
+            np.round(positions_slit, decimals=15),
+            fmt="%.14e",
+            delimiter=",",
+        )
         dump_json(parameters, dir_pos / f"{cnt_str}_param.json")
 
         # darw
         # parameters = df.iloc[num, :].T.to_dict()
-        draw(parameters, positions_icell, positions_ocell, positions_slit, dir_path / cnt_str)
+        draw(
+            parameters,
+            positions_icell,
+            positions_ocell,
+            positions_slit,
+            dir_path / cnt_str,
+        )
 
         del (
             positions_bslit,
@@ -106,23 +135,23 @@ def set_parameters():
     # unit : mm
     param = {
         # icell parameters
-        "diameter_icell": [3.0],
-        "diameter_prod": [30.0],
-        "thickness_rib": [0.5],
-        "thickness_slit": [1.0],
-        "thickness_prod": [1.0],
-        "thickness_bot": [250e-3],
-        "thickness_mid": [20e-3],
-        "thickness_top": [1e-3],
+        "diameter_icell": [1.74],
+        "diameter_prod": [180.0],
+        "thickness_rib": [0.2],
+        "thickness_slit": [1.8],
+        "thickness_prod": [5.0],
+        "thickness_bot": [0.0],
+        "thickness_mid": [0.1],
+        "thickness_top": [0.02],
         "length_prod": [1000.0],
-        "length_slit": [30.0],
+        "length_slit": [35.0],
         "length_seal": [40.0],
         "ratio_slit": [2],
         "mode_cell": ["A"],
         "mode_slit": ["A"],
         # ocell parameters
-        "thickness_rib_ocell": [0.5],
-        "hight_ocell": [1.0],
+        "thickness_rib_ocell": [0.2],
+        "hight_ocell": [1.8],
         "width_x1_ocell": [0.2],
         "hight_y1_ocell": [0.2],
         # calc value
@@ -188,11 +217,15 @@ def set_pos_cell(
         x_enum = [c_pitch * i for i in range(cnt_x)]
         x_enum[len(x_enum) : len(x_enum)] = [c_pitch * i for i in range(-1, -cnt_x, -1)]
         x_onum = [c_pitch * (i + 0.5) for i in range(cnt_x)]
-        x_onum[len(x_onum) : len(x_onum)] = [c_pitch * (i + 0.5) for i in range(-1, -cnt_x, -1)]
+        x_onum[len(x_onum) : len(x_onum)] = [
+            c_pitch * (i + 0.5) for i in range(-1, -cnt_x, -1)
+        ]
 
     else:
         x_enum = [c_pitch * (i + 0.5) for i in range(cnt_x)]
-        x_enum[len(x_enum) : len(x_enum)] = [c_pitch * (i + 0.5) for i in range(-1, -cnt_x, -1)]
+        x_enum[len(x_enum) : len(x_enum)] = [
+            c_pitch * (i + 0.5) for i in range(-1, -cnt_x, -1)
+        ]
         x_onum = [c_pitch * i for i in range(cnt_x)]
         x_onum[len(x_onum) : len(x_onum)] = [c_pitch * i for i in range(-1, -cnt_x, -1)]
 
@@ -252,15 +285,19 @@ def calc_value(df, num, p_cell, pos_icell, pos_ocell, pos_slit) -> dict:
     df.loc[num, "N_slit"] = len(pos_slit)
 
     effective_diameter_cell = df.loc[num, "diameter_icell"] - 2.0 * (
-        df.loc[num, "thickness_bot"] + df.loc[num, "thickness_mid"] + df.loc[num, "thickness_top"]
+        df.loc[num, "thickness_bot"]
+        + df.loc[num, "thickness_mid"]
+        + df.loc[num, "thickness_top"]
     )
-    icell_area = 0.25 * np.pi * (effective_diameter_cell ** 2.0) * num_icell
+    icell_area = 0.25 * np.pi * (effective_diameter_cell**2.0) * num_icell
     ocell_area = (
         df.loc[num, "hight_ocell"] * (p_cell - df.loc[num, "thickness_rib_ocell"])
         - 2.0 * df.loc[num, "width_x1_ocell"] * df.loc[num, "hight_y1_ocell"]
     ) * num_ocell
     prod_area = 0.25 * np.pi * (df.loc[num, "diameter_prod"] ** 2.0)
-    df.loc[num, "A_membrane"] = np.pi * effective_diameter_cell * df.loc[num, "length_prod"] * num_icell
+    df.loc[num, "A_membrane"] = (
+        np.pi * effective_diameter_cell * df.loc[num, "length_prod"] * num_icell
+    )
     df.loc[num, "A_icell"] = icell_area
     df.loc[num, "A_ocell"] = ocell_area
     df.loc[num, "R(A_icell/A_prod)"] = icell_area / prod_area
@@ -269,7 +306,8 @@ def calc_value(df, num, p_cell, pos_icell, pos_ocell, pos_slit) -> dict:
     prod_vol = prod_area * df.loc[num, "length_prod"]
     df.loc[num, "V_icell"] = icell_area * df.loc[num, "length_prod"]
     df.loc[num, "V_ocell"] = ocell_area * (
-        df.loc[num, "length_prod"] - 2.0 * (df.loc[num, "length_slit"] + df.loc[num, "length_seal"])
+        df.loc[num, "length_prod"]
+        - 2.0 * (df.loc[num, "length_slit"] + df.loc[num, "length_seal"])
     )
     df.loc[num, "R(V_icell/V_prod)"] = df.loc[num, "V_icell"] / prod_vol
     df.loc[num, "R(V_ocell/V_prod)"] = df.loc[num, "V_ocell"] / prod_vol
@@ -277,8 +315,12 @@ def calc_value(df, num, p_cell, pos_icell, pos_ocell, pos_slit) -> dict:
     return df.iloc[num, :].T.to_dict()
 
 
-def draw(param: dict, pos_icell: list, pos_ocell: list, pos_slit: list, fpath: str) -> None:
-    def draw_circle(ax, radius: float, center: tuple = (0.0, 0.0), linestyle: str = "solid") -> None:
+def draw(
+    param: dict, pos_icell: list, pos_ocell: list, pos_slit: list, fpath: str
+) -> None:
+    def draw_circle(
+        ax, radius: float, center: tuple = (0.0, 0.0), linestyle: str = "solid"
+    ) -> None:
         theta = np.linspace(0.0, 2.0 * np.pi, 360)
 
         xxx = center[0] + radius * np.cos(theta)
@@ -288,7 +330,9 @@ def draw(param: dict, pos_icell: list, pos_ocell: list, pos_slit: list, fpath: s
 
         return None
 
-    def draw_slit(ax, pos_slit: list, t_slit: float, d_prod: float, dbg: bool = True) -> None:
+    def draw_slit(
+        ax, pos_slit: list, t_slit: float, d_prod: float, dbg: bool = True
+    ) -> None:
         for _ in pos_slit:
             y_t = [_ + 0.5 * t_slit] * 2
             y_b = [_ - 0.5 * t_slit] * 2
@@ -313,14 +357,22 @@ def draw(param: dict, pos_icell: list, pos_ocell: list, pos_slit: list, fpath: s
         return None
 
     def draw_ocell(
-        ax, c_pitch: float, o_rib: float, o_hight: float, x1: float, y1: float, center: tuple = (0.0, 0.0)
+        ax,
+        c_pitch: float,
+        o_rib: float,
+        o_hight: float,
+        x1: float,
+        y1: float,
+        center: tuple = (0.0, 0.0),
     ) -> None:
         point = []
         dx = c_pitch - o_rib - 2.0 * x1
         dy = o_hight - 2.0 * y1
         width = c_pitch - o_rib
 
-        point.append([center[0] + 0.5 * (c_pitch - o_rib), center[1] + 0.5 * o_hight - y1])
+        point.append(
+            [center[0] + 0.5 * (c_pitch - o_rib), center[1] + 0.5 * o_hight - y1]
+        )
         point.append([point[0][0] - x1, point[0][1] + y1])
 
         point.append([point[1][0] - dx, point[1][1]])
@@ -353,7 +405,11 @@ def draw(param: dict, pos_icell: list, pos_ocell: list, pos_slit: list, fpath: s
 
     # draw product
     draw_circle(ax, radius=0.5 * param["diameter_prod"])
-    draw_circle(ax, radius=(0.5 * param["diameter_prod"] - param["thickness_prod"]), linestyle="dashed")
+    draw_circle(
+        ax,
+        radius=(0.5 * param["diameter_prod"] - param["thickness_prod"]),
+        linestyle="dashed",
+    )
 
     # draw slit
     draw_slit(ax, pos_slit, param["thickness_slit"], param["diameter_prod"])
@@ -389,7 +445,12 @@ def draw(param: dict, pos_icell: list, pos_ocell: list, pos_slit: list, fpath: s
             temp_str.append([f"{v:.3e} [mm3]"])
             table_label.append(k)
 
-        elif k in ["R(A_icell/A_prod)", "R(A_ocell/A_prod)", "R(V_icell/V_prod)", "R(V_ocell/V_prod)"]:
+        elif k in [
+            "R(A_icell/A_prod)",
+            "R(A_ocell/A_prod)",
+            "R(V_icell/V_prod)",
+            "R(V_ocell/V_prod)",
+        ]:
             temp_str.append([f"{v*100.0:.3g} [%]"])
             table_label.append(k)
 
@@ -407,7 +468,12 @@ def draw(param: dict, pos_icell: list, pos_ocell: list, pos_slit: list, fpath: s
 
     ay = fig.add_subplot(spec[1])
     ay.axis("off")
-    ay.table(cellText=temp_str, rowLabels=table_label, loc="center", bbox=[0.4, 0.0, 1.0, 1.0])
+    ay.table(
+        cellText=temp_str,
+        rowLabels=table_label,
+        loc="center",
+        bbox=[0.4, 0.0, 1.0, 1.0],
+    )
     # bbox = (xmin, ymin, width, height)
 
     # save fig
