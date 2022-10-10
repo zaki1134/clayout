@@ -12,8 +12,6 @@ from itertools import product, zip_longest
 from pathlib import Path
 from datetime import datetime
 
-# from pprint import pprint as pp
-
 
 def main():
     # make dir
@@ -29,9 +27,17 @@ def main():
 
     for num in range(len(inp)):
         cnt_str = f"index{num:0>4}"
-        # validate parameters
         case = Position(**inp.loc[num, :])
-        case.validation()
+        params = inp.loc[num, :].to_dict()
+
+        # validate parameters
+        ecode = case.validation()
+        if not len(ecode) == 0:
+            with open(dir_path / "error.txt", "at") as f:
+                temp = f"{num}, {[_ for _ in ecode]}"
+                f.write(temp)
+                f.write("\n")
+            continue
 
         # set base slit positions
         case.set_base_slit()
@@ -54,7 +60,7 @@ def main():
         out = pd.concat([out, res])
 
         # output positions
-        case.output_positions()
+        case.output_positions(dir_pos / cnt_str, params)
 
         # output png
         case.output_draw(dir_path / cnt_str, out.loc[num, :].to_dict())
@@ -72,11 +78,13 @@ def set_parameters():
         # product
         "dia_prod": [30.0],
         "thk_prod": [1.0],
-        "thk_rib": [0.5],
+        "thk_wall": [0.5],
+        "thk_slit": [1.0],
+        "thk_c2s": [1.0],
         "ln_prod": [1000.0],
+        "ln_slit": [30.0],
         "ln_seal": [5.0],
         "ln_glass_seal": [15.0],
-        "thk_c2s": [1.0],
         "ratio_slit": [3],
         "mode_cell": [True],
         "mode_slit": [True],
@@ -84,16 +92,12 @@ def set_parameters():
         "thk_bot": [250e-3],
         "thk_mid": [20e-3],
         "thk_top": [1e-3],
-        # slit
-        "thk_slit": [1.0],
-        "ln_slit": [30.0],
-        "ln_slit_sta": [15.0],
         # icell
-        "shape_icell": ["CIR"],
+        "shape_icell": [1],
         "dia_icell": [1.5],
         # ocell
-        "shape_ocell": ["OCT"],
-        "thk_rib_ocell": [0.5],
+        "shape_ocell": [1],
+        "thk_wall_ocell": [0.5],
         "hgt_ocell": [1.0],
         "x1_ocell": [0.2],
         "y1_ocell": [0.2],
@@ -109,14 +113,14 @@ class Params:
     # product
     dia_prod: float
     thk_prod: float
-    thk_rib: float
+    thk_wall: float
     ln_prod: float
     ln_seal: float
     ln_glass_seal: float
     thk_c2s: float
     ratio_slit: int
-    mode_cell: str
-    mode_slit: str
+    mode_cell: bool
+    mode_slit: bool
     # membrane
     thk_bot: float
     thk_mid: float
@@ -124,75 +128,65 @@ class Params:
     # slit
     thk_slit: float
     ln_slit: float
-    ln_slit_sta: float
     # incell
-    shape_icell: str
+    shape_icell: int
     dia_icell: float
     # outcell
-    shape_ocell: str
-    thk_rib_ocell: float
+    shape_ocell: int
+    thk_wall_ocell: float
     hgt_ocell: float
     x1_ocell: float
     y1_ocell: float
+    # supported_shape
+    supported_shape_in = {1: "CIR", 2: "HEX"}
+    supported_shape_out = {1: "OCT", 2: "CIR"}
 
     def pitch_x(self):
-        if self.shape_icell == "CIR":
-            result = self.dia_icell + self.thk_rib
-        elif self.shape_icell == "HEX":
-            pass
-        else:
+        if self.shape_icell == 1:
+            result = self.dia_icell + self.thk_wall
+        elif self.shape_icell == 2:
             pass
 
         return result
 
     def pitch_y(self):
-        if self.shape_icell == "CIR":
+        if self.shape_icell == 1:
             result = self.pitch_x() * np.sin(np.pi / 3.0)
-        elif self.shape_icell == "HEX":
-            pass
-        else:
+        elif self.shape_icell == 2:
             pass
 
         return result
 
     def pitch_slit(self):
-        if self.shape_icell == "CIR":
+        if self.shape_icell == 1:
             _ = self.thk_slit + self.dia_icell + 2.0 * self.thk_c2s
             result = _ + (self.ratio_slit - 1) * self.pitch_y()
-        elif self.shape_icell == "HEX":
-            pass
-        else:
+        elif self.shape_icell == 2:
             pass
 
         return result
 
     def lim_slit(self, num: int = 1):
-        if self.shape_icell == "CIR":
+        if self.shape_icell == 1:
             _ = 0.5 * (self.dia_prod - self.thk_slit)
             result = _ - self.thk_prod - num * self.dia_icell - self.thk_c2s
-        elif self.shape_icell == "HEX":
-            pass
-        else:
+        elif self.shape_icell == 2:
             pass
 
         return result
 
     def lim_icell(self):
-        if self.shape_icell == "CIR":
+        if self.shape_icell == 1:
             result = 0.5 * self.dia_prod - self.thk_prod - 0.5 * self.dia_icell
-        elif self.shape_icell == "HEX":
-            pass
-        else:
+        elif self.shape_icell == 2:
             pass
 
         return result
 
     def lim_ocell(self):
-        if self.shape_ocell == "OCT":
-            result = 0.5 * self.dia_prod - self.thk_prod - 0.5 * (self.pitch_x() - self.thk_rib_ocell)
-        elif self.shape_ocell == "CIR":
-            pass
-        else:
+        if self.shape_ocell == 1:
+            result = 0.5 * self.dia_prod - self.thk_prod - 0.5 * (self.pitch_x() - self.thk_wall_ocell)
+        elif self.shape_ocell == 2:
             pass
 
         return result
@@ -209,17 +203,51 @@ class Position(Params):
     pos_ocell = np.empty([0, 2])
 
     def validation(self):
-        pass
+        code = []
+
+        # check 1
+        if self.shape_icell not in self.supported_shape_in.keys():
+            code.append(1)
+
+        # check 2
+        if self.shape_ocell not in self.supported_shape_out.keys():
+            code.append(2)
+
+        # check 3
+        if not self.dia_icell - 2 * (self.thk_top + self.thk_mid + self.thk_bot) >= 0:
+            code.append(3)
+
+        # check 4
+        if not self.thk_slit >= self.hgt_ocell:
+            code.append(4)
+
+        # check 5
+        if not 0.5 * self.hgt_ocell >= self.y1_ocell:
+            code.append(5)
+
+        # check 6
+        if not 0.5 * (self.pitch_x() - self.thk_wall_ocell) >= self.x1_ocell:
+            code.append(6)
+
+        # check 7
+        if not (self.dia_prod - self.thk_prod) >= self.dia_icell:
+            code.append(7)
+
+        # check 8
+        if not 0.5 * self.ln_prod >= (self.ln_glass_seal + self.ln_slit):
+            code.append(8)
+
+        return code
 
     def set_base_slit(self, num: int = 300):
         # uniform slit length
-        x1 = []
+        y1 = []
         plus = [self.pitch_slit() * i for i in range(num) if self.dia_prod >= self.pitch_slit() * i]
-        x1[len(x1) : len(x1)] = plus
-        x1[len(x1) : len(x1)] = [-x for x in plus if x > 0.0]
+        y1[len(y1) : len(y1)] = plus
+        y1[len(y1) : len(y1)] = [-x for x in plus if x > 0.0]
 
-        x1.sort()
-        _ = [[y, z] for y, z in zip_longest(x1, [self.ln_slit], fillvalue=self.ln_slit)]
+        y1.sort()
+        _ = [[y, z] for y, z in zip_longest(y1, [self.ln_slit], fillvalue=self.ln_slit)]
         self.base_slit = np.array(_)
 
     def set_base_cell(self, num: int = 300):
@@ -303,22 +331,18 @@ class Position(Params):
         area_prod = 0.25 * np.pi * (self.dia_prod**2.0)
         vol_prod = area_prod * self.ln_prod
         ln_ocell = self.ln_prod - 2.0 * (self.ln_seal + self.ln_slit)
-        if self.shape_icell == "CIR":
+        if self.shape_icell == 1:
             eff_dia_icell = self.dia_icell - 2.0 * (self.thk_bot + self.thk_mid + self.thk_top)
             area_icell = 0.25 * np.pi * (eff_dia_icell**2.0)
             eff_peri = np.pi * eff_dia_icell
-        elif self.shape_icell == "HEX":
-            pass
-        else:
+        elif self.shape_icell == 2:
             pass
 
-        if self.shape_ocell == "OCT":
-            area_sq = self.hgt_ocell * (self.pitch_x() - self.thk_rib_ocell)
+        if self.shape_ocell == 1:
+            area_sq = self.hgt_ocell * (self.pitch_x() - self.thk_wall_ocell)
             area_corner = 2.0 * (self.x1_ocell * self.y1_ocell)
             area_ocell = area_sq - area_corner
-        elif self.shape_icell == "CIR":
-            pass
-        else:
+        elif self.shape_icell == 1:
             pass
 
         result["N_icell"] = self.pos_icell.shape[0]
@@ -365,7 +389,7 @@ class Position(Params):
             ax.plot(x_b, y_b, color="blue", linewidth=0.6, linestyle="dashed")
 
         def icell():
-            if self.shape_icell == "CIR":
+            if self.shape_icell == 1:
                 if not dbg:
                     r_cell = 0.5 * self.dia_icell - (self.thk_bot + self.thk_mid + self.thk_top)
                     color = "tab:blue"
@@ -374,15 +398,15 @@ class Position(Params):
                     color = "gray"
 
                 [ax.add_patch(patches.Circle(xy=tuple(_), radius=r_cell, fc=color)) for _ in self.pos_icell.tolist()]
-            elif self.shape_icell == "HEX":
+            elif self.shape_icell == 2:
                 pass
             else:
                 pass
 
         def ocell():
             ref = []
-            if self.shape_ocell == "OCT":
-                dx = 0.5 * (self.pitch_x() - self.thk_rib_ocell)
+            if self.shape_ocell == 1:
+                dx = 0.5 * (self.pitch_x() - self.thk_wall_ocell)
                 dy = 0.5 * self.hgt_ocell
                 ref.append([dx, dy - self.y1_ocell])
                 ref.append([dx - self.x1_ocell, dy])
@@ -403,7 +427,7 @@ class Position(Params):
                     _ = plt.Polygon(res, fc="green")
                     ax.add_patch(_)
 
-            elif self.shape_ocell == "CIR":
+            elif self.shape_ocell == 2:
                 pass
             else:
                 pass
@@ -502,14 +526,17 @@ class Position(Params):
         fig.savefig(fpath, facecolor="w", bbox_inches="tight", dpi=300)
         plt.close(fig)
 
-    def output_positions(self):
-        def dump_json(data: dict, fname: str = "test_json", sw_sort: bool = False):
-            with open(fname, "wt") as f:
-                json.dump(data, f, sort_keys=sw_sort, indent=4)
+    def output_positions(self, fpath, params):
+        xxx = fpath.with_name(str(fpath.name) + "_pos_icell.csv")
+        np.savetxt(xxx, self.pos_icell, fmt="%.14e", delimiter=",")
+        xxx = fpath.with_name(str(fpath.name) + "_pos_ocell.csv")
+        np.savetxt(xxx, self.pos_ocell, fmt="%.14e", delimiter=",")
+        xxx = fpath.with_name(str(fpath.name) + "_pos_slit.csv")
+        np.savetxt(xxx, self.pos_slit, fmt="%.14e", delimiter=",")
 
-        # np.savetxt(f"{num}_pos_icell.csv", case.pos_icell, fmt="%.14e", delimiter=",")
-        # np.savetxt(f"{num}_pos_ocell.csv", case.pos_ocell, fmt="%.14e", delimiter=",")
-        pass
+        xxx = fpath.with_name(str(fpath.name) + "_parameters.json")
+        with open(xxx, "w") as f:
+            json.dump(params, f, sort_keys=False, indent=4)
 
 
 if __name__ == "__main__":
