@@ -1,4 +1,3 @@
-# %%
 import sys
 from pathlib import Path, WindowsPath
 from datetime import datetime
@@ -11,89 +10,82 @@ import matplotlib.patches as patches
 from matplotlib.axes._axes import Axes
 from matplotlib.gridspec import GridSpec
 
-from pprint import pprint as pp
-
 
 def main():
-    # check the number of arguments
+    # コマンドライン引数を確認
     # if len(sys.argv) != 2:
     #     return None
 
-    # make directory
+    # 保存フォルダ作成
     # path = make_dir()
     # if path is None:
     #     return None
 
-    # read parameters
+    # CSV読込み
     # params = read_csv(sys.argv[1])
     params = read_csv("inp.csv")
 
     # main
     for row in params.itertuples():
-        # base slit
-        base_slit = CirOct.set_base_slit(
-            row.dia_prod,
-            row.pitch_slit,
+        # set slit
+        base_slit = CirOctCalc.set_base_slit(dia_prod=row.dia_prod, pitch_slit=row.pitch_slit)
+
+        # set base_cell
+        base_incell, base_outcell = CirOctCalc.set_base_cell(
+            dia_prod=row.dia_prod,
+            dia_incell=row.dia_incell,
+            thk_outcell=row.thk_outcell,
+            thk_c2s=row.thk_c2s,
+            pitch_x=row.pitch_x,
+            pitch_y=row.pitch_y,
+            ratio_slit=row.ratio_slit,
         )
 
-        # base cell
-        base_incell, base_outcell = CirOct.set_base_cell(
-            row.dia_prod,
-            row.dia_incell,
-            row.thk_slit,
-            row.thk_outcell,
-            row.thk_c2s,
-            row.pitch_x,
-            row.pitch_y,
-            row.ratio_slit,
+        # copy base_cell
+        copied_incell = CirOctCalc.copy_ycoord_xy(
+            pitch_x=row.pitch_x,
+            ratio_slit=row.ratio_slit,
+            xy=base_incell,
+            sl=base_slit[:, 1],
         )
-        copied_incell = CirOct.copy_base_cell(
-            row.pitch_x,
-            row.ratio_slit,
-            base_incell,
-            base_slit,
-        )
-        copied_outcell = CirOct.copy_base_cell(
-            row.pitch_x,
-            row.ratio_slit,
-            base_outcell,
-            base_slit,
+        copied_outcell = CirOctCalc.copy_ycoord_xy(
+            pitch_x=row.pitch_x,
+            ratio_slit=row.ratio_slit,
+            xy=base_outcell,
+            sl=base_slit[:, 1],
         )
 
         # offset cell, slit
-        offset_incell, offset_outcell, offset_slit = CirOct.offset_xy(
-            row.mode_cell,
-            row.mode_slit,
-            row.pitch_x,
-            row.pitch_slit,
-            copied_incell,
-            copied_outcell,
-            base_slit,
+        offset_slit = CirOctCalc.offset_xy(
+            mode_cell=False,
+            mode_slit=row.mode_slit,
+            pitch_x=0.0,
+            pitch_slit=row.pitch_slit,
+            xy=base_slit,
+        )
+        offset_incell = CirOctCalc.offset_xy(
+            mode_cell=row.mode_cell,
+            mode_slit=row.mode_slit,
+            pitch_x=row.pitch_x,
+            pitch_slit=row.pitch_slit,
+            xy=copied_incell,
+        )
+        offset_outcell = CirOctCalc.offset_xy(
+            mode_cell=row.mode_cell,
+            mode_slit=row.mode_slit,
+            pitch_x=row.pitch_x,
+            pitch_slit=row.pitch_slit,
+            xy=copied_outcell,
         )
 
-        # select slit
-        select_slit = CirOct.select_slit(
-            row.lim_slit,
-            offset_slit,
-        )
-
-        # select cell
-        select_inell = CirOct.select_cell(
-            row.lim_incell,
-            offset_incell,
-        )
-        select_outell = CirOct.select_cell(
-            row.lim_outcell,
-            offset_outcell,
-        )
+        # select cell, slit
+        select_slit = CirOctCalc.select_y(lim=row.lim_slit, xy=offset_slit)
+        select_inell = CirOctCalc.select_r(lim=row.lim_incell, xy=offset_incell)
+        tmp_outell = CirOctCalc.select_r(lim=row.lim_outcell, xy=offset_outcell)
+        select_outell = CirOctCalc.select_y(lim=row.lim_slit, xy=tmp_outell)
 
         # draw
-        Post.draw(
-            row,
-            select_inell,
-            select_outell,
-            select_slit,
-        )
+        CirOctPost.draw(inp=row, ic=select_inell, oc=select_outell, sl=select_slit)
 
 
 def make_dir() -> WindowsPath:
@@ -131,40 +123,43 @@ def read_csv(path: str) -> pd.DataFrame:
     return res
 
 
-class CirOct:
-    """
-    incell : circle
-    outcell : octagon
+class CirOctCalc:
+    incell_shape: str = "cicle"
+    outcell_shape: str = "octagon"
 
-    """
-
+    @staticmethod
     def set_base_slit(
         dia_prod: float,
         pitch_slit: float,
     ) -> np.ndarray:
         """
-        slitの基準座標([Y])を算出
+        slitの基準座標(X, Y)を算出
 
         Args:
             dia_prod (float): dia_prod
             pitch_slit (float): pitch_slit
 
         Returns:
-            res (np.ndarray): ([Y])
+            res (np.ndarray): (X, Y)
         """
-
         num = np.int64(np.ceil(dia_prod / pitch_slit))
-        res = [pitch_slit * i for i in range(num)]
-        [res.append(pitch_slit * i) for i in range(-1, -num, -1)]
-        res = np.array(res)
-        res.sort()
+
+        # +Y方向配置(0<=)
+        tmp_slit = [(0.0, pitch_slit * i) for i in range(num)]
+
+        # -Y方向配置(<0)
+        [tmp_slit.append((0.0, pitch_slit * i)) for i in range(-1, -num, -1)]
+
+        # sort
+        tmp_slit = np.array(tmp_slit)
+        res = tmp_slit[tmp_slit[:, 1].argsort()]
 
         return res
 
+    @staticmethod
     def set_base_cell(
         dia_prod: float,
         dia_incell: float,
-        thk_slit: float,
         thk_outcell: float,
         thk_c2s: float,
         pitch_x: float,
@@ -172,12 +167,11 @@ class CirOct:
         ratio_slit: int,
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
-        incellとoutcellの基準座標([X, Y])を算出
+        incellとoutcellの基準座標(X, Y)を算出
 
         Args:
             dia_prod (float): dia_prod
             dia_incell (float): dia_incell
-            thk_slit (float): thk_slit
             thk_outcell (float): thk_outcell
             thk_c2s (float): thk_c2s
             pitch_x (float): pitch_x
@@ -185,41 +179,36 @@ class CirOct:
             ratio_slit (int): ratio_slit
 
         Returns:
-            incell (np.ndarray): ([X, Y])
-            outcell (np.ndarray): ([X, Y])
+            incell (np.ndarray): (X, Y)
+            outcell (np.ndarray): (X, Y)
         """
-        # set outcell
+        # set outcell (Y=0.0)
         num = np.int64(np.ceil(dia_prod / pitch_x))
-        _ = [(pitch_x * i, 0.0) for i in range(num)]
-        [_.append((pitch_x * i, 0.0)) for i in range(-1, -num, -1)]
-        outcell = np.array(_)
+        oc = [(pitch_x * i, 0.0) for i in range(num)]
+        [oc.append((pitch_x * i, 0.0)) for i in range(-1, -num, -1)]
+        outcell = np.array(oc)
 
-        # incell 1列目
-        ref = np.copy(outcell)
-        ref[:, 0] += 0.5 * pitch_x
-        ref[:, 1] += 0.5 * max(thk_slit, thk_outcell) + thk_c2s + 0.5 * dia_incell
+        # set incell 1列目
+        row = np.copy(outcell)
+        row[:, 0] += 0.5 * pitch_x
+        row[:, 1] += 0.5 * (thk_outcell + dia_incell) + thk_c2s
 
-        # incell 2列目以降
-        tmp = []
-        tmp.append(ref)
+        # set incell 2列目以降
+        incell = np.copy(row)
         for i in range(1, ratio_slit):
-            _ = np.copy(ref)
-            if i % 2 == 0:
-                _[:, 1] += pitch_y * i
-            else:
-                _[:, 0] += 0.5 * pitch_x
-                _[:, 1] += pitch_y * i
-            tmp.append(_)
-
-        _ = np.array(tmp)
-        incell = _.reshape((_.shape[0] * _.shape[1], _.shape[2]))
+            ic = np.copy(row)
+            if i % 2 != 0:
+                ic[:, 0] += 0.5 * pitch_x
+            ic[:, 1] += pitch_y * i
+            incell = np.vstack([incell, ic])
 
         return incell, outcell
 
-    def copy_base_cell(
+    @staticmethod
+    def copy_ycoord_xy(
         pitch_x: float,
         ratio_slit: int,
-        ce: np.ndarray,
+        xy: np.ndarray,
         sl: np.ndarray,
     ) -> np.ndarray:
         """
@@ -228,113 +217,111 @@ class CirOct:
         Args:
             pitch_x (float): pitch_x
             ratio_slit (int): ratio_slit
-            ce (np.ndarray): ([X, Y])
-            sl (np.ndarray): ([Y])
+            xy (np.ndarray): (X, Y)
+            sl (np.ndarray): (Y)
 
         Returns:
-            res (np.ndarray): ([X, Y])
+            res (np.ndarray): (X, Y)
         """
-        sw = True
-        tmp = []
-        for y in sl:
-            _ = np.copy(ce)
-            if not sw:
-                _[:, 0] += 0.5 * pitch_x
-            _[:, 1] += y
-            tmp.append(_)
-            if ratio_slit % 2 == 0:
-                sw = not sw
+        size = len(sl)
+        if ratio_slit % 2 == 0:
+            switches = np.tile([True, False], size // 2 + 1)[:size]
+            if not switches[np.where(sl == 0.0)[0]]:
+                switches = ~switches
+        else:
+            switches = np.tile([True, True], size // 2 + 1)[:size]
 
-        _ = np.array(tmp)
-        res = _.reshape((_.shape[0] * _.shape[1], _.shape[2]))
+        # +Y方向コピー(0<=)
+        plus_xy = np.copy(xy)
+        for y, sw in zip(sl, switches):
+            copied_xy = np.copy(xy)
+            if not sw:
+                copied_xy[:, 0] += 0.5 * pitch_x
+            copied_xy[:, 1] += y
+            plus_xy = np.vstack([plus_xy, copied_xy])
+
+        # -Y方向コピー(<0)
+        condition = plus_xy[:, 1] > 0.0
+        tmp_xy = np.copy(plus_xy[condition])
+        tmp_xy[:, 1] *= -1.0
+        res = np.vstack([plus_xy, tmp_xy])
 
         return res
 
+    @staticmethod
     def offset_xy(
         mode_cell: bool,
         mode_slit: bool,
         pitch_x: float,
         pitch_slit: float,
-        ic: np.ndarray,
-        oc: np.ndarray,
-        sl: np.ndarray,
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        xy: np.ndarray,
+    ) -> np.ndarray:
         """
         cellとslitのXY方向オフセット
 
         Args:
-            mode_cell (bool): X方向オフセット(mode_cell)
-            mode_slit (bool): Y方向オフセット(mode_slit)
+            mode_cell (bool): X方向スイッチ(mode_cell)
+            mode_slit (bool): Y方向スイッチ(mode_slit)
             pitch_x (float): X方向オフセット量(pitch_x)
             pitch_slit (float): Y方向オフセット量(pitch_slit)
-            ic (np.ndarray): incell ([X, Y])
-            oc (np.ndarray): outcell ([X, Y])
-            sl (np.ndarray): slit ([Y])
+            xy (np.ndarray): 座標(cell or slit) (X, Y)
 
         Returns:
-            incell (np.ndarray): ([X, Y])
-            outcell (np.ndarray): ([X, Y])
-            slit (np.ndarray): ([Y])
+            res (np.ndarray): (X, Y)
         """
-        incell = np.copy(ic)
-        outcell = np.copy(oc)
-        slit = np.copy(sl)
+        res = np.copy(xy)
 
         if mode_cell:
-            x1 = 0.5 * pitch_x
-            incell[:, 0] += x1
-            outcell[:, 0] += x1
+            res[:, 0] += 0.5 * pitch_x
 
         if mode_slit:
-            y1 = 0.5 * pitch_slit
-            incell[:, 1] += y1
-            outcell[:, 1] += y1
-            slit = sl + y1
+            res[:, 1] += 0.5 * pitch_slit
 
-        return incell, outcell, slit
+        return res
 
-    def select_slit(
-        lim_slit: float,
-        sl: np.ndarray,
-    ) -> np.ndarray:
-        """
-        lim_slit範囲内のslitを抽出
-
-        Args:
-            lim_slit (float): lim_slit
-            sl (np.ndarray): slit ([Y])
-
-        Returns:
-            slit (np.ndarray): ([Y])
-        """
-
-        condition = abs(sl) <= lim_slit
-        slit = sl[condition]
-
-        return slit
-
-    def select_cell(
+    @staticmethod
+    def select_r(
         lim: float,
-        ce: np.ndarray,
+        xy: np.ndarray,
     ) -> np.ndarray:
         """
-        限界値(lim_incell, lim_outcell)範囲内のcellを抽出
+        (X, Y)座標->半径Rが範囲内の要素を抽出
 
         Args:
             lim (float): 限界値(lim_incell, lim_outcell)
-            ce (np.ndarray): ([X, Y])
+            xy (np.ndarray): ([X, Y])
 
         Returns:
-            cell (np.ndarray): ([X, Y])
+            (np.ndarray): ([X, Y])
         """
-        condition = np.sqrt(ce[:, 0] ** 2.0 + ce[:, 1] ** 2.0) <= lim
-        cell = ce[condition]
+        condition = np.sqrt(xy[:, 0] ** 2.0 + xy[:, 1] ** 2.0) <= lim
 
-        return cell
+        return xy[condition]
+
+    @staticmethod
+    def select_y(
+        lim: float,
+        xy: np.ndarray,
+    ) -> np.ndarray:
+        """
+        (X, Y)座標のYが範囲内の要素を抽出
+
+        Args:
+            lim (float): 限界値(lim_incell, lim_outcell)
+            xy (np.ndarray): ([X, Y])
+
+        Returns:
+            (np.ndarray): ([X, Y])
+        """
+        condition = abs(xy[:, 1]) <= lim
+
+        return xy[condition]
 
 
-class Post:
+class CirOctPost:
+    @classmethod
     def draw(
+        cls,
         inp: tuple,
         ic: np.ndarray,
         oc: np.ndarray,
@@ -345,13 +332,12 @@ class Post:
     ):
         # set fig, gridspec
         fig = plt.figure(figsize=(fig_x / fig_dpi, fig_y / fig_dpi), dpi=fig_dpi)
-        gs = GridSpec(1, 6)
-        ss1 = gs.new_subplotspec((0, 0), rowspan=1, colspan=3)
-        ss2 = gs.new_subplotspec((0, 3), rowspan=1, colspan=3)
+        gs = GridSpec(1, 8)
+        ss1 = gs.new_subplotspec((0, 0), colspan=5)
+        ss2 = gs.new_subplotspec((0, 6), colspan=2)
 
-        # set axes
+        # set ax1
         ax1 = plt.subplot(ss1)
-        ax2 = plt.subplot(ss2)
 
         ax1.grid(linewidth=0.2)
         ax1.set_axisbelow(True)
@@ -361,26 +347,29 @@ class Post:
         ax1.set_xlim(-scale, scale)
         ax1.set_ylim(-scale, scale)
 
+        # set ax2
+        ax2 = plt.subplot(ss2)
+        ax2.axis("off")
+
         # product
-        Post.product(ax1, inp.dia_prod, facecolor="None")
-        Post.product(ax1, inp.dia_prod, transparency=0.5)
-        Post.product(ax1, inp.dia_prod - 2.0 * inp.thk_prod, facecolor="None", transparency=1.0, linestyle="dashed")
+        cls._product(ax1, inp.dia_prod, facecolor="None")
+        cls._product(ax1, inp.dia_prod, transparency=0.5)
+        cls._product(ax1, inp.dia_prod - 2.0 * inp.thk_prod, facecolor="None", transparency=1.0, linestyle="dashed")
 
         # slit
-        Post.slit(ax1, inp.dia_prod, inp.thk_slit, sl)
+        cls._slit(ax1, inp.dia_prod, inp.thk_slit, sl[:, 1])
 
         # cell
-        Post.incell(ax1, inp.dia_incell - inp.thk_top - inp.thk_mid - inp.thk_bot, ic)
-        Post.outcell(ax1, inp.thk_x1, inp.thk_x2, inp.thk_y1, inp.thk_y2, oc)
+        cls._incell(ax1, inp.dia_incell - inp.thk_top - inp.thk_mid - inp.thk_bot, ic)
+        cls._outcell(ax1, inp.thk_x1, inp.thk_x2, inp.thk_y1, inp.thk_y2, oc)
 
         # table
-        _, _ = Post.table_calc(inp, ic, oc, sl)
-        # Post.table(ax2, inp._asdict())
+        cls._table(ax2, cls._table_calc(inp._asdict(), ic, oc, sl))
 
         plt.show()
         plt.close(fig)
 
-    def product(
+    def _product(
         ax: Axes,
         diameter: float,
         facecolor: str = "#BFBFBF",
@@ -407,7 +396,7 @@ class Post:
         )
         ax.add_patch(_)
 
-    def slit(
+    def _slit(
         ax: Axes,
         dia_prod: float,
         thk_slit: float,
@@ -423,36 +412,29 @@ class Post:
             sl (np.ndarray): ([Y])
         """
         for y in sl:
-            # slit淵右下(p1),右上(p2)の座標算出
-            rrr = 0.5 * dia_prod
+            # vertex(円弧10分割)の座標算出
+            radius = 0.5 * dia_prod
             y_t = y + 0.5 * thk_slit
             y_b = y - 0.5 * thk_slit
-            x_t = np.sqrt(rrr**2.0 - y_t**2.0)
-            x_b = np.sqrt(rrr**2.0 - y_b**2.0)
-            p1 = np.array([x_b, y_b])
-            p2 = np.array([x_t, y_t])
+            theta1 = np.arcsin(y_b / radius)
+            theta2 = np.arcsin(y_t / radius)
+            angles = np.linspace(theta1, theta2, 10)
+            xy = np.array([radius * np.cos(angles), radius * np.sin(angles)]).T
 
-            # p1, p2のなす角を100分割した配列
-            angle = np.arctan2(np.linalg.det([p1, p2]), np.dot(p1, p2))
-            angles = np.linspace(0, angle, 100) + np.arctan2(p1[1], p1[0])
+            # -X方向コピー
+            copied_vertex = np.copy(xy)
+            copied_vertex[:, 0] *= -1
+            vertex = np.vstack([xy, copied_vertex])
 
-            # 円上の各角度におけるXY座標の算出(+X側->-X側)
-            x_plus = []
-            [x_plus.append([rrr * np.cos(ag), rrr * np.sin(ag)]) for ag in angles]
-            x_plus = np.array(x_plus)
-            x_minus = np.copy(x_plus)
-            x_minus[:, 0] *= -1
-            point = np.vstack([x_plus, x_minus])
-
-            # 各点を角度順にソート
-            angles = np.arctan2(point[:, 1], point[:, 0])
-            sorted_point = point[np.argsort(angles)]
+            # vertexを角度順にソート
+            angles = np.arctan2(vertex[:, 1], vertex[:, 0])
+            sorted_vertex = vertex[np.argsort(angles)]
 
             # 描画
-            _ = plt.Polygon(sorted_point, closed=True, facecolor="#97B6D8", fill=True, linewidth=0, alpha=0.5)
+            _ = plt.Polygon(sorted_vertex, closed=True, facecolor="#97B6D8", fill=True, linewidth=0, alpha=0.5)
             ax.add_patch(_)
 
-    def incell(
+    def _incell(
         ax: Axes,
         diameter: float,
         ic: np.ndarray,
@@ -467,7 +449,7 @@ class Post:
         """
         [ax.add_patch(patches.Circle(xy=_, radius=0.5 * diameter, facecolor="#4F81BD")) for _ in ic]
 
-    def outcell(
+    def _outcell(
         ax: Axes,
         thk_x1: float,
         thk_x2: float,
@@ -511,13 +493,25 @@ class Post:
             _ = plt.Polygon(ref, closed=True, facecolor="#76913C", fill=True, linewidth=0)
             ax.add_patch(_)
 
-    def table_calc(
-        inp: tuple,
+    def _table_calc(
+        inp: dict,
         ic: np.ndarray,
         oc: np.ndarray,
         sl: np.ndarray,
-    ) -> tuple[dict, dict]:
-        # filtered_dict
+    ) -> dict:
+        """
+        計算結果画像に記載するパラメータ表の作成
+
+        Args:
+            inp (dict): input parameters
+            ic (np.ndarray): incell ([X, Y])
+            oc (np.ndarray): outcell ([X, Y])
+            sl (np.ndarray): slit ([X, Y])
+
+        Returns:
+            res (dict): valueに単位を付けた文字列辞書
+        """
+        # 画像に出力するパラメータ
         target = (
             "dia_incell",
             "thk_bot",
@@ -534,93 +528,57 @@ class Post:
             "mode_cell",
             "mode_slit",
         )
-        filtered_dict = {key: inp._asdict()[key] for key in target}
+        filtered_dict = {key: inp[key] for key in target}
 
-        ln_prod = 1000.0
-
-        diameter_effective = inp.dia_incell - 2.0 * (inp.thk_top + inp.thk_mid + inp.thk_bot)
-        area_incell = 0.25 * (np.pi * diameter_effective**2.0)
-        area_outcell = 4.0 * ((inp.thk_x1 + inp.thk_x2) * (inp.thk_y1 + inp.thk_y2) - 0.5 * (inp.thk_x1 * inp.thk_y1))
-        area_prod = 0.25 * (np.pi * inp.dia_prod**2.0)
-        volume_incell = area_incell * ln_prod * ic.shape[0]
-        volume_outcell = area_outcell * ln_prod * oc.shape[0]
-        volume_prod = area_prod * ln_prod - volume_incell - volume_outcell
-
-        calc = {
-            "N(incell)": ic.shape[0],
-            "N(outcell)": oc.shape[0],
-            "N(slit)": sl.shape[0],
-            "A(membrane)": np.pi * diameter_effective * ln_prod * ic.shape[0],
-            "A(incell)": area_incell * ic.shape[0],
-            "A(outcell)": area_outcell * oc.shape[0],
-            "R_A(incell/prod)": area_incell / area_prod,
-            "R_A(outcell/prod)": area_outcell / area_prod,
-            "V(incell)": volume_incell,
-            "V(outcell)": volume_outcell,
-            "R_V(incell/prod)": volume_incell / volume_prod,
-            "R_V(outcell/prod)": volume_outcell / volume_prod,
-        }
-        pp(calc, sort_dicts=False)
-
-        return filtered_dict, calc
-
-    def table(
-        ax: Axes,
-        inp_dict: dict,
-    ) -> None:
-        # val = []
-        # key = []
-        # # table_a
-        # for k, v in self.res.inp.__dict__.items():
-        #     if type(v) is np.float64:
-        #         _ = [f"{v:.3e} [mm]"]
-        #     elif type(v) is np.int64:
-        #         _ = [f"{v} [-]"]
-        #     else:
-        #         _ = [f"{v}"]
-        #     val.append(_)
-        #     key.append(k)
-
-        # # table_b
-        # for k, v in self.table_b.items():
-        #     if re.match("^N", k):
-        #         _ = [f"{v} [-]"]
-        #     elif re.match("^A", k):
-        #         _ = [f"{v:.3e} [mm2]"]
-        #     elif re.match("^R_A", k):
-        #         _ = [f"{v*100:.1f} [%]"]
-        #     elif re.match("^V", k):
-        #         _ = [f"{v:.3e} [mm3]"]
-        #     elif re.match("^R_V", k):
-        #         _ = [f"{v*100:.1f} [%]"]
-        #     val.append(_)
-        #     key.append(k)
-
-        # return val, key
-
-        # # table
-        # val, key = table()
-
-        # # ax2 table
-        # ax2 = plt.subplot(ss2)
-        # tab = ax2.table(cellText=val, rowLabels=key, loc="center", colWidths=[1, 1])
-        # for _, cell in tab.get_celld().items():
-        #     cell.set_height(1 / len(val))
-        # ax2.axis("off")
-        # tab.set_fontsize(16)
-
-        key = []
+        # 値を文字列化
         val = []
-        for k, v in inp_dict.items():
-            key.append(str(k))
-            val.append([str(v)])
+        key = []
 
-        # ax.table(cellText=val, rowLabels=key, loc="center", colWidths=[1, 1])
-        ax.table(cellText=val, rowLabels=key, loc="center")
-        ax.axis("off")
+        for k, v in filtered_dict.items():
+            if "dia_" in k or "thk_" in k:
+                string = f"{v:.2f} [mm]"
+            else:
+                string = f"{v}"
+            val.append(string)
+            key.append(k)
+
+        res = dict(zip(key, val))
+
+        # セル数等の計算
+        thk_mem = inp["thk_top"] + inp["thk_mid"] + inp["thk_bot"]
+        diameter_effective = inp["dia_incell"] - 2.0 * thk_mem
+        area_incell = 0.25 * (np.pi * diameter_effective**2.0)
+        area_prod = 0.25 * (np.pi * inp["dia_prod"] ** 2.0)
+        area_mem = np.pi * diameter_effective * inp["ln_prod"] * ic.shape[0]
+
+        res["N(incell)"] = f"{ic.shape[0]}"
+        res["N(outcell)"] = f"{oc.shape[0]}"
+        res["N(slit)"] = f"{sl.shape[0]}"
+        res["A(membrane)"] = f"{area_mem:.2e} [mm2]"
+        res["A(incell)"] = f"{(area_incell * ic.shape[0]):.2e} [mm2]"
+        res["R_A(incell/prod)"] = f"{(area_incell * ic.shape[0] / area_prod*100.0):.1f} [%]"
+
+        return res
+
+    def _table(
+        ax: Axes,
+        inp: dict,
+    ) -> None:
+        """
+        パラメータ表の描画
+
+        Args:
+            ax (Axes): Axes
+            inp (dict): input parameters
+        """
+        key = [str(k) for k in inp.keys()]
+        val = [[str(v)] for v in inp.values()]
+
+        tab = ax.table(cellText=val, rowLabels=key, loc="center")
+        tab.set_fontsize(16)
+        for _, cell in tab.get_celld().items():
+            cell.set_height(1 / len(val))
 
 
 if __name__ == "__main__":
     main()
-
-# %%
