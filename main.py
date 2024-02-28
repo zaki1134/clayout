@@ -1,626 +1,744 @@
-# %%
+import re
 import sys
 from pathlib import Path, WindowsPath
 from datetime import datetime
 from typing import Tuple
-
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
-from matplotlib.axes._axes import Axes
 from matplotlib.gridspec import GridSpec
 
-from pprint import pprint as pp
 
+def main() -> None:
+    # Check if the correct number of command-line arguments is provided
+    if len(sys.argv) != 2:
+        return None
 
-def main():
-    # check the number of arguments
-    # if len(sys.argv) != 2:
-    #     return None
+    # Get the input file path from command-line arguments
+    inp_path = sys.argv[1]
 
-    # make directory
-    # path = make_dir()
-    # if path is None:
-    #     return None
+    # Check if the input file exists
+    if not WindowsPath(inp_path).exists():
+        return None
 
-    # read parameters
-    # params = read_csv(sys.argv[1])
-    params = read_csv("inp.csv")
+    # Create a directory path with the current timestamp if it doesn't exist
+    dir_path = Path(datetime.now().strftime("%Y%m%d_%H%M%S"))
+    if not dir_path.exists():
+        dir_path.mkdir(parents=True)
 
     # main
-    for row in params.itertuples():
-        # base slit
-        base_slit = CirOct.set_base_slit(
-            row.dia_prod,
-            row.pitch_slit,
-        )
+    for row in pd.read_csv(inp_path).itertuples():
+        # Calculate the limit radius based on row values
+        limit_radius = 0.5 * row.dia_prod - row.thk_prod
 
-        # base cell
-        base_incell, base_outcell = CirOct.set_base_cell(
+        # Determine the shape based on row values
+        if row.shape_incell == "circle":
+            shape = (row.shape_incell, row.shape_incell, row.shape_outcell)
+        elif row.shape_incell == "hexagon":
+            shape = (row.shape_incell, "heptagon", row.shape_outcell)
+
+        # Calculate initial coordinates based on row values
+        init_df = calc_init_coordinates(
+            shape,
             row.dia_prod,
-            row.dia_incell,
-            row.thk_slit,
-            row.thk_outcell,
-            row.thk_c2s,
+            row.thk_i2o,
             row.pitch_x,
             row.pitch_y,
             row.ratio_slit,
         )
-        copied_incell = CirOct.copy_base_cell(
-            row.pitch_x,
-            row.ratio_slit,
-            base_incell,
-            base_slit,
-        )
-        copied_outcell = CirOct.copy_base_cell(
-            row.pitch_x,
-            row.ratio_slit,
-            base_outcell,
-            base_slit,
-        )
 
-        # offset cell, slit
-        offset_incell, offset_outcell, offset_slit = CirOct.offset_xy(
-            row.mode_cell,
-            row.mode_slit,
+        # Copy coordinates based on row values
+        copied_df = copy_coordinates(
+            init_df,
+            row.dia_prod,
             row.pitch_x,
             row.pitch_slit,
-            copied_incell,
-            copied_outcell,
-            base_slit,
+            row.ratio_slit,
         )
 
-        # select slit
-        select_slit = CirOct.select_slit(
+        # Adjust coordinates based on row mode
+        if row.mode_cell:
+            copied_df["x"] += 0.5 * row.pitch_x
+        if row.mode_slit:
+            copied_df["y"] += 0.5 * row.pitch_slit
+
+        # Filter coordinates based on row values and calculated limit radius
+        filtered_df = filter_coordinates(
+            copied_df,
+            row.dia_incell,
+            row.thk_cc,
+            row.thk_x1,
+            row.thk_y1,
             row.lim_slit,
-            offset_slit,
+            limit_radius,
         )
 
-        # select cell
-        select_inell = CirOct.select_cell(
-            row.lim_incell,
-            offset_incell,
-        )
-        select_outell = CirOct.select_cell(
-            row.lim_outcell,
-            offset_outcell,
-        )
+        # Perform result post-processing
+        post = ResultPost(row, filtered_df)
+        post.draw()
 
-        # draw
-        Post.draw(
-            row,
-            select_inell,
-            select_outell,
-            select_slit,
-        )
+        # Write result to file in the directory path
+        # post.write_file(dir_path)
 
 
-def make_dir() -> WindowsPath:
+def calc_init_coordinates(
+    shape: tuple,
+    dia_prod: float,
+    thk_i2o: float,
+    pitch_x: float,
+    pitch_y: float,
+    ratio_slit: int,
+) -> pd.DataFrame:
     """
-    結果保存用フォルダの作成
+    初期座標を計算します。
+
+    Parameters:
+        shape (tuple): 形状情報(str, str, str)
+        dia_prod (float): dia_prod
+        thk_i2o (float): thk_i2o
+        pitch_x (float): pitch_x
+        pitch_y (float): pitch_y
+        ratio_slit (int): ratio_slit
 
     Returns:
-        WindowsPath: 作成したフォルダパス
+        pd.DataFrame: 計算された初期座標データを含むDataFrame
     """
-    dir_path = Path(datetime.now().strftime("%Y%m%d_%H%M%S"))
-    if not dir_path.exists():
-        dir_path.mkdir()
-        res = dir_path
+    # empty dataframe
+    result = DataFrameEditor()
+
+    # add dataframe(slit)
+    result.add_coordinate("slit", "standard", 0.0, np.array([(0.0, 0.0)]))
+
+    # initial outcell
+    num = np.int64(np.ceil(dia_prod / pitch_x))
+    x_coordinates = np.arange(-num * pitch_x, num * pitch_x, pitch_x)
+    coordinate_oc = np.column_stack((x_coordinates, np.zeros_like(x_coordinates)))
+
+    # add dataframe(outcell)
+    result.add_coordinate("outcell", shape[2], 0.0, coordinate_oc)
+
+    # initial incell(step1)
+    coordinates_ic_step1 = np.copy(coordinate_oc)
+    coordinates_ic_step1[:, 0] += 0.5 * pitch_x
+    coordinates_ic_step1[:, 1] += thk_i2o
+
+    # add dataframe(incell)
+    if shape[0] == shape[1]:
+        result.add_coordinate("incell", shape[0], 0.0, coordinates_ic_step1)
     else:
-        res = None
+        result.add_coordinate("incell", shape[1], 0.0, coordinates_ic_step1)
 
-    return res
+    # initial incell(after step1)
+    for i in range(1, ratio_slit):
+        coordinates_ic = np.copy(coordinates_ic_step1)
+        coordinates_ic[:, 0] += 0.5 * (i % 2) * pitch_x
+        coordinates_ic[:, 1] += pitch_y * i
+
+        # add dataframe(incell)
+        if i == ratio_slit - 1:
+            result.add_coordinate("incell", shape[1], 180.0, coordinates_ic)
+        else:
+            result.add_coordinate("incell", shape[0], 0.0, coordinates_ic)
+
+    return result.info
 
 
-def read_csv(path: str) -> pd.DataFrame:
+def copy_coordinates(
+    ref_df: pd.DataFrame,
+    dia_prod: float,
+    pitch_x: float,
+    pitch_slit: float,
+    ratio_slit: int,
+) -> pd.DataFrame:
     """
-    コマンドライン引数のcsvファイルの読み込み
+    基準座標をコピーして新しいDataFrameを生成
+
+    Parameters:
+        ref_df (pd.DataFrame): 基準座標(DataFrame)
+        dia_prod (float): dia_prod
+        pitch_x (float): pitch_x
+        pitch_slit (float): pitch_slit
+        ratio_slit (int): ratio_slit
+
+    Returns:
+        pd.DataFrame: 新しい座標データを含むDataFrame
+    """
+    # calc slit positions
+    num = np.int64(np.ceil(dia_prod / pitch_slit))
+    y_coordinates = np.arange(-num * pitch_slit, num * pitch_slit, pitch_slit)
+    coordinate_sl = np.column_stack((np.zeros_like(y_coordinates), y_coordinates))
+
+    # offset switch
+    switches = np.arange(-num, num + 1) % 2 != 0 if ratio_slit % 2 == 0 else np.zeros(2 * num + 1, dtype=bool)
+
+    # calculate x offset
+    x_offsets = np.where(switches, 0.5 * pitch_x, 0)
+
+    # copy and concatenate DataFrame
+    copied_dfs = []
+    for y, x_offset in zip(coordinate_sl, x_offsets):
+        copied_df = ref_df.copy()
+        copied_df["y"] += y[1]
+        copied_df["x"] += x_offset
+        copied_dfs.append(copied_df)
+
+    return pd.concat(copied_dfs, ignore_index=True)
+
+
+def filter_coordinates(
+    df: pd.DataFrame,
+    dia_incell: float,
+    thk_cc: float,
+    thk_x1: float,
+    thk_y1: float,
+    limit_y: float,
+    limit_r: float,
+) -> pd.DataFrame:
+    """
+    座標をフィルタリングし、制限値内に収まらない座標を削除します。
+
+    Parameters:
+        df (pd.DataFrame): 座標データを含むDataFrame
+        dia_incell (float): dia_incell
+        thk_cc (float): thk_cc
+        thk_x1 (float): thk_x1
+        thk_y1 (float): 八角形寸法
+        limit_y (float): Y軸方向の制限値
+        limit_r (float): 半径の制限値
+
+    Returns:
+        pd.DataFrame: フィルタリングされた座標データを含むDataFrame
+    """
+    # Create a copy of the input DataFrame
+    ref_df = df.copy()
+
+    # Add a new column to mark coordinates for removal
+    ref_df["remove"] = False
+
+    # Iterate over unique shapes in the DataFrame
+    for shape in ref_df["shape"].unique():
+        if shape == "standard":
+            condition1 = (ref_df["category"] == "slit") & (ref_df["shape"] == shape)
+            condition2 = abs(ref_df["y"]) >= limit_y
+            ref_df.loc[(condition1 & condition2), "remove"] = True
+
+        elif shape == "circle":
+            condition1 = (ref_df["category"] == "incell") & (ref_df["shape"] == shape)
+            cell_coordinates = np.column_stack((ref_df["x"], ref_df["y"]))
+            condition2 = np.linalg.norm(cell_coordinates, axis=1) >= limit_r - 0.5 * dia_incell
+            ref_df.loc[(condition1 & condition2), "remove"] = True
+
+        elif shape == "hexagon":
+            condition1 = (ref_df["category"] == "incell") & (ref_df["shape"] == shape)
+            polygon = vertex_hex(0.5 * dia_incell)
+            ref_df.loc[condition1, "remove"] = ref_df[condition1].apply(
+                lambda row: is_in_limit(limit_r, polygon, row["x"], row["y"], row["angle"]), axis=1
+            )
+
+        elif shape == "heptagon":
+            condition1 = (ref_df["category"] == "incell") & (ref_df["shape"] == shape)
+            polygon = vertex_hep(0.5 * dia_incell)
+            ref_df.loc[condition1, "remove"] = ref_df[condition1].apply(
+                lambda row: is_in_limit(limit_r, polygon, row["x"], row["y"], row["angle"]), axis=1
+            )
+
+        elif shape == "octagon":
+            condition1 = (ref_df["category"] == "outcell") & (ref_df["shape"] == shape)
+            polygon = vertex_oct(thk_cc, thk_x1, thk_y1)
+            ref_df.loc[condition1, "remove"] = ref_df[condition1].apply(
+                lambda row: is_in_limit(limit_r, polygon, row["x"], row["y"], row["angle"]), axis=1
+            )
+            condition2 = abs(ref_df["y"]) >= limit_y
+            ref_df.loc[(condition1 & condition2), "remove"] = True
+
+    # Remove coordinates marked for removal
+    filtered_df = ref_df[ref_df["remove"] != True]
+    filtered_df.drop(columns=["remove"], inplace=True)
+
+    return filtered_df
+
+
+def is_in_limit(
+    limit: float,
+    polygon: np.ndarray,
+    offset_x: float,
+    offset_y: float,
+    angle: float = 0.0,
+) -> bool:
+    """
+    多角形の頂点が与えられた制限値内に収まるかどうかを確認
+    中心座標を回転+オフセットした多角形の各頂点のR座標を得る
+    それら頂点の座標が1つでも制限値外にあればTrueを返す
+
+    Parameters:
+        limit (float): 制限値
+        polygon (np.ndarray): 多角形の頂点座標.サイズ(N, 2)
+        offset_x (float): X軸方向のオフセット
+        offset_y (float): Y軸方向のオフセット
+        angle (float, optional): 回転角度.デフォルト値は0.0
+
+    Returns:
+        bool: 多角形頂点が1つでも制限値外にある場合はTrue、それ以外の場合はFalse
+    """
+    # Make a copy of the input polygon array
+    copied_polygon = polygon.copy()
+
+    # Create a rotation matrix using the given angle
+    radian = np.deg2rad(angle)
+    rot_mat = np.array([[np.cos(radian), -np.sin(radian)], [np.sin(radian), np.cos(radian)]])
+
+    # Rotate the copied polygon points using the rotation matrix
+    rot_polygon = np.dot(copied_polygon, rot_mat)
+
+    # Offset the rotated polygon by the specified offsets
+    rot_polygon[:, 0] += offset_x
+    rot_polygon[:, 1] += offset_y
+
+    # Check if any point in the rotated polygon exceeds the limit
+    check = np.linalg.norm(rot_polygon, axis=1) >= limit
+
+    # Return True if any point exceeds the limit, otherwise False
+    return np.any(check)
+
+
+def vertex_slit(radius_prod: float, thk_slit: float, y: float) -> np.ndarray:
+    """
+    スリット形状を多角形で表現.その頂点の座標を計算
+
+    Parameters:
+        radius_prod (float): 製品半径
+        thk_slit (float): スリット厚
+        y (float): スリットのY方向座標
+
+    Returns:
+        np.ndarray: 多角形の頂点座標.サイズ(N, 2)
+    """
+    # Calculate the y-coordinates of the reference points for the slit
+    ref_points_y = np.array([y - 0.5 * thk_slit, y + 0.5 * thk_slit])
+
+    # Calculate the x-coordinates of the reference points
+    ref_points_x = radius_prod * np.cos(np.arcsin(ref_points_y / radius_prod))
+
+    # Calculate the angles corresponding to the reference points
+    ref_angles = np.arctan2(ref_points_y, ref_points_x)
+
+    # Generate a set of angles evenly spaced between the minimum and maximum reference angles
+    angles = np.linspace(np.min(ref_angles), np.max(ref_angles), 10)
+
+    # Calculate the coordinates of points on the arc using the generated angles
+    coordinates = radius_prod * np.column_stack((np.cos(angles), np.sin(angles)))
+
+    # Duplicate the coordinates by reflecting them across the y-axis
+    copied_coordinates = np.copy(coordinates)
+    copied_coordinates[:, 0] *= -1.0
+    coordinates = np.vstack([coordinates, copied_coordinates])
+
+    # Sort the coordinates based on the angle they make with the origin
+    sorted_angles = np.arctan2(coordinates[:, 1], coordinates[:, 0])
+    sorted_angles[sorted_angles < 0] += 2 * np.pi
+    slit_points = coordinates[np.argsort(sorted_angles)]
+
+    return slit_points
+
+
+def vertex_hex(radius_incircle: float) -> np.ndarray:
+    """
+    正六角形の頂点の座標を計算
 
     Args:
-        path (str): inp.csv
+        radius_incircle (float): 内接円半径
 
     Returns:
-        pd.DataFrame: 全水準
+        np.ndarray: 正六角形の頂点の座標.サイズ(N, 2)
     """
-    if WindowsPath(path).exists():
-        res = pd.read_csv(path)
-    else:
-        res = None
+    # Calculate the radius of the circumscribed circle
+    circumscribed_radius = radius_incircle / np.cos(np.pi / 6)
 
-    return res
+    # List of angles
+    angles = np.arange(-np.pi / 6, 3 * np.pi / 2, np.pi / 3)
+
+    # Calculate coordinates of 6 points
+    hex_points = circumscribed_radius * np.column_stack((np.cos(angles), np.sin(angles)))
+
+    return hex_points
 
 
-class CirOct:
+def vertex_hep(radius_incircle: float, rot_angle: float = 0.0) -> np.ndarray:
     """
-    incell : circle
-    outcell : octagon
+    七角形の頂点の座標を計算.正六角形に1辺追加
 
+    Args:
+        radius_incircle (float): 元になる正六角形の内接円半径
+        rot_angle (float, optional): 原点中心からの回転角度(degree).デフォルト値は0.0
+
+    Returns:
+        np.ndarray: 七角形の頂点の座標.サイズ(N, 2)
+    """
+    # Calculate the radius of the circumscribed circle
+    circumscribed_radius = radius_incircle / np.cos(np.pi / 6)
+
+    # Calculate coordinates of 5 points
+    angles_5_points = np.arange(-np.pi / 6, 4 * np.pi / 3, np.pi / 3)
+    hep_points = circumscribed_radius * np.column_stack((np.cos(angles_5_points), np.sin(angles_5_points)))
+
+    # Calculate coordinates of 2 points
+    angles_2_points = np.array([4 * np.pi / 3, 5 * np.pi / 3])
+    dummy_points = radius_incircle * np.column_stack((np.cos(angles_2_points), np.sin(angles_2_points)))
+
+    # Stack all points together
+    hep_points = np.vstack([hep_points, dummy_points])
+
+    # Calculate coordinates of rotated 7 points
+    radian = np.deg2rad(rot_angle)
+    rot_mat = np.array([[np.cos(radian), -np.sin(radian)], [np.sin(radian), np.cos(radian)]])
+    hep_points = np.dot(hep_points, rot_mat)
+
+    return hep_points
+
+
+def vertex_oct(thk_cc: float, thk_x1: float, thk_y1: float) -> np.ndarray:
+    """
+    八角形の頂点の座標を計算
+
+    Parameters:
+        thk_cc (float): 八角形寸法
+        thk_x1 (float): 八角形寸法
+        thk_y1 (float): 八角形寸法
+
+    Returns:
+        np.ndarray: 八角形の頂点の座標.サイズ(N, 2)
+    """
+    # Calculate coordinates of 4 points
+    oct_points = np.array(
+        [
+            (thk_x1 + thk_cc, thk_y1),
+            (thk_x1, thk_y1 + thk_cc),
+            (-thk_x1, thk_y1 + thk_cc),
+            (-(thk_x1 + thk_cc), thk_y1),
+        ]
+    )
+
+    # Calculate coordinates of rotated 4 points
+    rot_mat = np.array([[np.cos(np.pi), -np.sin(np.pi)], [np.sin(np.pi), np.cos(np.pi)]])
+    dummy_points = np.dot(oct_points, rot_mat)
+
+    # Stack all points together
+    oct_points = np.vstack([oct_points, dummy_points])
+
+    return oct_points
+
+
+class DataFrameEditor:
+    """
+    pandas.DataFrameを編集するためのクラス
+
+    Attributes:
+        column_types (dict): 各列名とデータ型を指定する辞書
     """
 
-    def set_base_slit(
-        dia_prod: float,
-        pitch_slit: float,
-    ) -> np.ndarray:
+    column_types = {
+        "category": np.str_,
+        "shape": np.str_,
+        "angle": np.float64,
+        "x": np.float64,
+        "y": np.float64,
+    }
+
+    def __init__(self) -> None:
         """
-        slitの基準座標([Y])を算出
+        指定された列名とデータ型で空のDataFrameを初期化、インスタンス変数に格納
+        """
+        # Initialize an empty DataFrame with specified column names
+        empty_df = pd.DataFrame(columns=list(self.column_types.keys()))
+
+        # Convert the data types of the DataFrame columns as per the defined column_types dictionary
+        self.info = empty_df.astype(self.column_types)
+
+    def add_coordinate(self, category: str, shape: str, angle: float, coordinates: np.ndarray) -> None:
+        """
+        インスタンス変数のDataFrameに情報を追加
 
         Args:
-            dia_prod (float): dia_prod
-            pitch_slit (float): pitch_slit
-
-        Returns:
-            res (np.ndarray): ([Y])
+            category (str): データのカテゴリ
+            shape (str): 形状
+            angle (float): セルを傾ける角度(degree)
+            coordinates (np.ndarray): N個の中心座標.サイズ(N, 2)
         """
+        # Skip if coordinates array is empty
+        if not coordinates.size:
+            return
 
-        num = np.int64(np.ceil(dia_prod / pitch_slit))
-        res = [pitch_slit * i for i in range(num)]
-        [res.append(pitch_slit * i) for i in range(-1, -num, -1)]
-        res = np.array(res)
-        res.sort()
+        # Create DataFrame from XY coordinates
+        coordinates_df = pd.DataFrame(coordinates, columns=["x", "y"])
 
-        return res
-
-    def set_base_cell(
-        dia_prod: float,
-        dia_incell: float,
-        thk_slit: float,
-        thk_outcell: float,
-        thk_c2s: float,
-        pitch_x: float,
-        pitch_y: float,
-        ratio_slit: int,
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        incellとoutcellの基準座標([X, Y])を算出
-
-        Args:
-            dia_prod (float): dia_prod
-            dia_incell (float): dia_incell
-            thk_slit (float): thk_slit
-            thk_outcell (float): thk_outcell
-            thk_c2s (float): thk_c2s
-            pitch_x (float): pitch_x
-            pitch_y (float): pitch_y
-            ratio_slit (int): ratio_slit
-
-        Returns:
-            incell (np.ndarray): ([X, Y])
-            outcell (np.ndarray): ([X, Y])
-        """
-        # set outcell
-        num = np.int64(np.ceil(dia_prod / pitch_x))
-        _ = [(pitch_x * i, 0.0) for i in range(num)]
-        [_.append((pitch_x * i, 0.0)) for i in range(-1, -num, -1)]
-        outcell = np.array(_)
-
-        # incell 1列目
-        ref = np.copy(outcell)
-        ref[:, 0] += 0.5 * pitch_x
-        ref[:, 1] += 0.5 * max(thk_slit, thk_outcell) + thk_c2s + 0.5 * dia_incell
-
-        # incell 2列目以降
-        tmp = []
-        tmp.append(ref)
-        for i in range(1, ratio_slit):
-            _ = np.copy(ref)
-            if i % 2 == 0:
-                _[:, 1] += pitch_y * i
-            else:
-                _[:, 0] += 0.5 * pitch_x
-                _[:, 1] += pitch_y * i
-            tmp.append(_)
-
-        _ = np.array(tmp)
-        incell = _.reshape((_.shape[0] * _.shape[1], _.shape[2]))
-
-        return incell, outcell
-
-    def copy_base_cell(
-        pitch_x: float,
-        ratio_slit: int,
-        ce: np.ndarray,
-        sl: np.ndarray,
-    ) -> np.ndarray:
-        """
-        cell座標をY方向に複製
-
-        Args:
-            pitch_x (float): pitch_x
-            ratio_slit (int): ratio_slit
-            ce (np.ndarray): ([X, Y])
-            sl (np.ndarray): ([Y])
-
-        Returns:
-            res (np.ndarray): ([X, Y])
-        """
-        sw = True
-        tmp = []
-        for y in sl:
-            _ = np.copy(ce)
-            if not sw:
-                _[:, 0] += 0.5 * pitch_x
-            _[:, 1] += y
-            tmp.append(_)
-            if ratio_slit % 2 == 0:
-                sw = not sw
-
-        _ = np.array(tmp)
-        res = _.reshape((_.shape[0] * _.shape[1], _.shape[2]))
-
-        return res
-
-    def offset_xy(
-        mode_cell: bool,
-        mode_slit: bool,
-        pitch_x: float,
-        pitch_slit: float,
-        ic: np.ndarray,
-        oc: np.ndarray,
-        sl: np.ndarray,
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """
-        cellとslitのXY方向オフセット
-
-        Args:
-            mode_cell (bool): X方向オフセット(mode_cell)
-            mode_slit (bool): Y方向オフセット(mode_slit)
-            pitch_x (float): X方向オフセット量(pitch_x)
-            pitch_slit (float): Y方向オフセット量(pitch_slit)
-            ic (np.ndarray): incell ([X, Y])
-            oc (np.ndarray): outcell ([X, Y])
-            sl (np.ndarray): slit ([Y])
-
-        Returns:
-            incell (np.ndarray): ([X, Y])
-            outcell (np.ndarray): ([X, Y])
-            slit (np.ndarray): ([Y])
-        """
-        incell = np.copy(ic)
-        outcell = np.copy(oc)
-        slit = np.copy(sl)
-
-        if mode_cell:
-            x1 = 0.5 * pitch_x
-            incell[:, 0] += x1
-            outcell[:, 0] += x1
-
-        if mode_slit:
-            y1 = 0.5 * pitch_slit
-            incell[:, 1] += y1
-            outcell[:, 1] += y1
-            slit = sl + y1
-
-        return incell, outcell, slit
-
-    def select_slit(
-        lim_slit: float,
-        sl: np.ndarray,
-    ) -> np.ndarray:
-        """
-        lim_slit範囲内のslitを抽出
-
-        Args:
-            lim_slit (float): lim_slit
-            sl (np.ndarray): slit ([Y])
-
-        Returns:
-            slit (np.ndarray): ([Y])
-        """
-
-        condition = abs(sl) <= lim_slit
-        slit = sl[condition]
-
-        return slit
-
-    def select_cell(
-        lim: float,
-        ce: np.ndarray,
-    ) -> np.ndarray:
-        """
-        限界値(lim_incell, lim_outcell)範囲内のcellを抽出
-
-        Args:
-            lim (float): 限界値(lim_incell, lim_outcell)
-            ce (np.ndarray): ([X, Y])
-
-        Returns:
-            cell (np.ndarray): ([X, Y])
-        """
-        condition = np.sqrt(ce[:, 0] ** 2.0 + ce[:, 1] ** 2.0) <= lim
-        cell = ce[condition]
-
-        return cell
-
-
-class Post:
-    def draw(
-        inp: tuple,
-        ic: np.ndarray,
-        oc: np.ndarray,
-        sl: np.ndarray,
-        fig_x: int = 1920,
-        fig_y: int = 1080,
-        fig_dpi: int = 100,
-    ):
-        # set fig, gridspec
-        fig = plt.figure(figsize=(fig_x / fig_dpi, fig_y / fig_dpi), dpi=fig_dpi)
-        gs = GridSpec(1, 6)
-        ss1 = gs.new_subplotspec((0, 0), rowspan=1, colspan=3)
-        ss2 = gs.new_subplotspec((0, 3), rowspan=1, colspan=3)
-
-        # set axes
-        ax1 = plt.subplot(ss1)
-        ax2 = plt.subplot(ss2)
-
-        ax1.grid(linewidth=0.2)
-        ax1.set_axisbelow(True)
-        ax1.set_aspect("equal", adjustable="datalim")
-
-        scale = 0.52 * inp.dia_prod
-        ax1.set_xlim(-scale, scale)
-        ax1.set_ylim(-scale, scale)
-
-        # product
-        Post.product(ax1, inp.dia_prod, facecolor="None")
-        Post.product(ax1, inp.dia_prod, transparency=0.5)
-        Post.product(ax1, inp.dia_prod - 2.0 * inp.thk_prod, facecolor="None", transparency=1.0, linestyle="dashed")
-
-        # slit
-        Post.slit(ax1, inp.dia_prod, inp.thk_slit, sl)
-
-        # cell
-        Post.incell(ax1, inp.dia_incell - inp.thk_top - inp.thk_mid - inp.thk_bot, ic)
-        Post.outcell(ax1, inp.thk_x1, inp.thk_x2, inp.thk_y1, inp.thk_y2, oc)
-
-        # table
-        _, _ = Post.table_calc(inp, ic, oc, sl)
-        # Post.table(ax2, inp._asdict())
-
-        plt.show()
-        plt.close(fig)
-
-    def product(
-        ax: Axes,
-        diameter: float,
-        facecolor: str = "#BFBFBF",
-        transparency: float = 1.0,
-        linestyle: str = "solid",
-    ) -> None:
-        """
-        製品径の描画(patches.Circle)
-
-        Args:
-            ax (Axes): Axes
-            diameter (float): diameter
-            facecolor (str, optional): facecolor. Defaults to "#BFBFBF".
-            transparency (float, optional): linewidth. Defaults to 0.5.
-            linestyle (str, optional): linestyle. Defaults to "solid".
-        """
-        _ = patches.Circle(
-            xy=(0.0, 0.0),
-            radius=0.5 * diameter,
-            facecolor=facecolor,
-            alpha=transparency,
-            edgecolor="black",
-            linestyle=linestyle,
+        # Add object category, shape, and angle to each row
+        info_df = pd.DataFrame(
+            {
+                "category": [category] * len(coordinates),
+                "shape": [shape] * len(coordinates),
+                "angle": [angle] * len(coordinates),
+            }
         )
-        ax.add_patch(_)
 
-    def slit(
-        ax: Axes,
-        dia_prod: float,
-        thk_slit: float,
-        sl: np.ndarray,
-    ) -> None:
+        # Concatenate coordinates DataFrame with info DataFrame
+        combined_df = pd.concat([info_df, coordinates_df], axis=1)
+
+        # Append the new DataFrame to the existing DataFrame
+        self.info = pd.concat([self.info, combined_df], ignore_index=True)
+
+
+class ResultPost:
+    """
+    結果を描画,保存するクラス
+
+    Attributes:
+        info (pd.DataFrame):結果データ(DataFrame)
+        inp (tuple):入力データ(tuple)
+    """
+
+    def __init__(self, inp: tuple, df: pd.DataFrame) -> None:
+        self.info = df
+        self.inp = inp
+
+    def write_file(self, path: WindowsPath) -> None:
         """
-        slitの描画(plt.Polygon)
+        以下の3ファイルを出力
+        0000_layout.csv : categoly, x, yを記載
+        0000_parameters.csv : 入力値
+        0000.png : 画像出力
 
         Args:
-            ax (Axes): Axes
-            dia_prod (float): dia_prod
-            thk_slit (float): thk_slit
-            sl (np.ndarray): ([Y])
+            path (WindowsPath): 結果保存先パス
         """
-        for y in sl:
-            # slit淵右下(p1),右上(p2)の座標算出
-            rrr = 0.5 * dia_prod
-            y_t = y + 0.5 * thk_slit
-            y_b = y - 0.5 * thk_slit
-            x_t = np.sqrt(rrr**2.0 - y_t**2.0)
-            x_b = np.sqrt(rrr**2.0 - y_b**2.0)
-            p1 = np.array([x_b, y_b])
-            p2 = np.array([x_t, y_t])
+        # Generate an index with leading zeros for formatting
+        idx = f"{self.inp.Index:04}"
+        dir_path = path / idx
 
-            # p1, p2のなす角を100分割した配列
-            angle = np.arctan2(np.linalg.det([p1, p2]), np.dot(p1, p2))
-            angles = np.linspace(0, angle, 100) + np.arctan2(p1[1], p1[0])
+        # Write the layout information to a CSV file
+        condition = ["category", "x", "y"]
+        self.info[condition].to_csv(dir_path / (idx + "_layout.csv"), float_format="%.5e", index=False)
 
-            # 円上の各角度におけるXY座標の算出(+X側->-X側)
-            x_plus = []
-            [x_plus.append([rrr * np.cos(ag), rrr * np.sin(ag)]) for ag in angles]
-            x_plus = np.array(x_plus)
-            x_minus = np.copy(x_plus)
-            x_minus[:, 0] *= -1
-            point = np.vstack([x_plus, x_minus])
+        # Write the input parameters to a CSV file
+        inp_df = pd.DataFrame([self.inp])
+        inp_df.to_csv(dir_path / (idx + "_parameters.csv"), float_format="%.5e", index=False)
 
-            # 各点を角度順にソート
-            angles = np.arctan2(point[:, 1], point[:, 0])
-            sorted_point = point[np.argsort(angles)]
+        # Save the plot as a PNG file
+        plt.savefig(dir_path / (idx + ".png"))
 
-            # 描画
-            _ = plt.Polygon(sorted_point, closed=True, facecolor="#97B6D8", fill=True, linewidth=0, alpha=0.5)
-            ax.add_patch(_)
-
-    def incell(
-        ax: Axes,
-        diameter: float,
-        ic: np.ndarray,
-    ) -> None:
+    def draw(self) -> None:
         """
-        incellの描画(patches.Circle)
-
-        Args:
-            ax (Axes): Axes
-            diameter (float): diameter
-            ic (np.ndarray): incell ([X, Y])
+        画像出力
         """
-        [ax.add_patch(patches.Circle(xy=_, radius=0.5 * diameter, facecolor="#4F81BD")) for _ in ic]
 
-    def outcell(
-        ax: Axes,
-        thk_x1: float,
-        thk_x2: float,
-        thk_y1: float,
-        thk_y2: float,
-        oc: np.ndarray,
-    ) -> None:
-        """
-        outcellの描画(plt.Polygon)
+        def pre(size: float, fig_x: int = 1920, fig_y: int = 1080, fig_dpi: int = 100) -> Tuple[plt.Axes, plt.Axes]:
+            """
+            指定されたサイズと解像度で図を作成
 
-        Args:
-            ax (Axes): Axes
-            thk_x1 (float): thk_x1
-            thk_x2 (float): thk_x2
-            thk_y1 (float): thk_y1
-            thk_y2 (float): thk_y2
-            oc (np.ndarray): outcell ([X, Y])
-        """
-        # 八角形右上2点座標算出
-        ref = np.array([(thk_x1 + thk_x2, thk_y2), (thk_x2, thk_y1 + thk_y2)])
+            Args:
+                size (float): 図のサイズを指定
+                fig_x (int, optional): 図の幅(pixel)のデフォルト値は1920
+                fig_y (int, optional): 図の高さ(pixel)のデフォルト値は1080
+                fig_dpi (int, optional): 図のDPIのデフォルト値は100
 
-        # X方向対称コピー
-        tmp1 = np.copy(ref)
-        tmp1[:, 0] *= -1.0
-        tmp1 = np.vstack([ref, tmp1])
+            Returns:
+                Tuple[plt.Axes, plt.Axes]: 2つのAxesオブジェクトを含むタプル
+                    1つ目は描画用, 2つ目は入力値テーブル用
+            """
+            # Create a new figure with specified dimensions and DPI
+            fig = plt.figure(figsize=(fig_x / fig_dpi, fig_y / fig_dpi), dpi=fig_dpi)
+            fig.subplots_adjust(left=0.025, right=0.99, bottom=0.025, top=0.99)
 
-        # Y方向対称コピー
-        tmp2 = np.copy(tmp1)
-        tmp2[:, 1] *= -1.0
-        point = np.vstack([tmp1, tmp2])
+            # Define a grid specification with one row and ten columns
+            gs = GridSpec(1, 10)
+            ss1 = gs.new_subplotspec((0, 0), colspan=7)
+            ss2 = gs.new_subplotspec((0, 8), colspan=2)
 
-        # 各点を角度順にソート
-        angles = np.arctan2(point[:, 1], point[:, 0])
-        octagon_point = point[np.argsort(angles)]
+            # Create the first subplot (ax1) within the specified subplotspec
+            ax1 = plt.subplot(ss1)
+            ax1.grid(linewidth=0.2)
+            ax1.set_axisbelow(True)
+            ax1.set_aspect("equal", adjustable="datalim")
 
-        # 八角形の中心座標でオフセットして描画
-        for x, y in oc:
-            ref = np.copy(octagon_point)
-            ref[:, 0] += x
-            ref[:, 1] += y
-            _ = plt.Polygon(ref, closed=True, facecolor="#76913C", fill=True, linewidth=0)
-            ax.add_patch(_)
+            # Set the display range for ax1
+            scale = 0.52 * size
+            ax1.set_xlim(-scale, scale)
+            ax1.set_ylim(-scale, scale)
 
-    def table_calc(
-        inp: tuple,
-        ic: np.ndarray,
-        oc: np.ndarray,
-        sl: np.ndarray,
-    ) -> tuple[dict, dict]:
-        # filtered_dict
-        target = (
-            "dia_incell",
-            "thk_bot",
-            "thk_mid",
-            "thk_top",
-            "thk_wall",
-            "thk_c2s",
-            "dia_prod",
-            "thk_prod",
-            "thk_outcell",
-            "thk_wall_outcell",
-            "thk_slit",
-            "ratio_slit",
-            "mode_cell",
-            "mode_slit",
-        )
-        filtered_dict = {key: inp._asdict()[key] for key in target}
+            # Create the second subplot (ax2) within the specified subplotspec
+            ax2 = plt.subplot(ss2)
+            ax2.axis("off")
 
-        ln_prod = 1000.0
+            return ax1, ax2
 
-        diameter_effective = inp.dia_incell - 2.0 * (inp.thk_top + inp.thk_mid + inp.thk_bot)
-        area_incell = 0.25 * (np.pi * diameter_effective**2.0)
-        area_outcell = 4.0 * ((inp.thk_x1 + inp.thk_x2) * (inp.thk_y1 + inp.thk_y2) - 0.5 * (inp.thk_x1 * inp.thk_y1))
-        area_prod = 0.25 * (np.pi * inp.dia_prod**2.0)
-        volume_incell = area_incell * ln_prod * ic.shape[0]
-        volume_outcell = area_outcell * ln_prod * oc.shape[0]
-        volume_prod = area_prod * ln_prod - volume_incell - volume_outcell
+        def draw_circle(
+            ax: plt.Axes,
+            diameter: float,
+            facecolor: str = "#BFBFBF",
+            transparency: float = 1.0,
+            edgecolor: str = "black",
+            linestyle: str = "solid",
+            offset_x: float = 0.0,
+            offset_y: float = 0.0,
+        ) -> None:
+            """
+            円を描画
 
-        calc = {
-            "N(incell)": ic.shape[0],
-            "N(outcell)": oc.shape[0],
-            "N(slit)": sl.shape[0],
-            "A(membrane)": np.pi * diameter_effective * ln_prod * ic.shape[0],
-            "A(incell)": area_incell * ic.shape[0],
-            "A(outcell)": area_outcell * oc.shape[0],
-            "R_A(incell/prod)": area_incell / area_prod,
-            "R_A(outcell/prod)": area_outcell / area_prod,
-            "V(incell)": volume_incell,
-            "V(outcell)": volume_outcell,
-            "R_V(incell/prod)": volume_incell / volume_prod,
-            "R_V(outcell/prod)": volume_outcell / volume_prod,
-        }
-        pp(calc, sort_dicts=False)
+            Args:
+                ax (plt.Axes): 描画先のAxes
+                diameter (float): 円の直径
+                facecolor (str, optional): 塗りつぶし色.デフォルト値は"#BFBFBF"
+                transparency (float, optional): 透明度.デフォルト値は1.0
+                edgecolor (str, optional): 境界線の色.デフォルト値は"black"
+                linestyle (str, optional): 境界線のスタイル.デフォルト値は"solid"
+                x (float, optional): 円の中心x座標.デフォルト値は0.0
+                y (float, optional): 円の中心y座標.デフォルト値は0.0
+            """
+            circles = patches.Circle(
+                xy=(offset_x, offset_y),
+                radius=0.5 * diameter,
+                facecolor=facecolor,
+                alpha=transparency,
+                edgecolor=edgecolor,
+                linestyle=linestyle,
+            )
+            ax.add_patch(circles)
 
-        return filtered_dict, calc
+        def draw_polygon(
+            ax: plt.Axes,
+            ref_coordinate: np.ndarray,
+            offset_x: float = 0.0,
+            offset_y: float = 0.0,
+            facecolor: str = "#4F81BD",
+        ) -> None:
+            """
+            多角形を描画
 
-    def table(
-        ax: Axes,
-        inp_dict: dict,
-    ) -> None:
-        # val = []
-        # key = []
-        # # table_a
-        # for k, v in self.res.inp.__dict__.items():
-        #     if type(v) is np.float64:
-        #         _ = [f"{v:.3e} [mm]"]
-        #     elif type(v) is np.int64:
-        #         _ = [f"{v} [-]"]
-        #     else:
-        #         _ = [f"{v}"]
-        #     val.append(_)
-        #     key.append(k)
+            Args:
+                ax (plt.Axes): 描画先のAxes
+                ref_coordinate (np.ndarray): 多角形の各点の座標.サイズ(N, 2)
+                offset_x (float, optional): 中心x座標.デフォルト値は0.0
+                offset_y (float, optional): 中心y座標.デフォルト値は0.0
+                facecolor (str, optional): 塗りつぶし色.デフォルト値は"#4F81BD"
+            """
+            points = np.copy(ref_coordinate)
+            points[:, 0] += offset_x
+            points[:, 1] += offset_y
+            polygons = plt.Polygon(points, closed=True, facecolor=facecolor, fill=True, linewidth=0)
+            ax.add_patch(polygons)
 
-        # # table_b
-        # for k, v in self.table_b.items():
-        #     if re.match("^N", k):
-        #         _ = [f"{v} [-]"]
-        #     elif re.match("^A", k):
-        #         _ = [f"{v:.3e} [mm2]"]
-        #     elif re.match("^R_A", k):
-        #         _ = [f"{v*100:.1f} [%]"]
-        #     elif re.match("^V", k):
-        #         _ = [f"{v:.3e} [mm3]"]
-        #     elif re.match("^R_V", k):
-        #         _ = [f"{v*100:.1f} [%]"]
-        #     val.append(_)
-        #     key.append(k)
+        def table(ax: plt.Axes, inp: tuple, info: pd.DataFrame) -> None:
+            """
+            テーブルを描画.出力パラメータはtarget(tuple)で指定
 
-        # return val, key
+            Args:
+                ax (plt.Axes): 描画先のAxes
+                inp (tuple): 入力データ(tuple)
+                info (pd.DataFrame): 結果データ(DataFrame)
+            """
+            # Select parameters to export
+            target = (
+                "dia_incell",
+                "thk_bot",
+                "thk_mid",
+                "thk_top",
+                "thk_wall",
+                "thk_c2s",
+                "dia_prod",
+                "thk_prod",
+                "thk_outcell",
+                "thk_wall_outcell",
+                "thk_slit",
+                "ratio_slit",
+                "mode_cell",
+                "mode_slit",
+            )
+            inp_dict = inp._asdict()
+            export_params = {key: inp_dict[key] for key in target}
 
-        # # table
-        # val, key = table()
+            # Extract data for different categories
+            df_incell = info[info["category"] == "incell"]
+            df_outcell = info[info["category"] == "outcell"]
+            df_slit = info[info["category"] == "slit"]
 
-        # # ax2 table
-        # ax2 = plt.subplot(ss2)
-        # tab = ax2.table(cellText=val, rowLabels=key, loc="center", colWidths=[1, 1])
-        # for _, cell in tab.get_celld().items():
-        #     cell.set_height(1 / len(val))
-        # ax2.axis("off")
-        # tab.set_fontsize(16)
+            # Calculate additional output parameters
+            thk_mem = inp_dict["thk_top"] + inp_dict["thk_mid"] + inp_dict["thk_bot"]
+            diameter_effective = inp_dict["dia_incell"] - 2.0 * thk_mem
+            area_incell = 0.25 * (np.pi * diameter_effective**2.0)
+            area_prod = 0.25 * (np.pi * inp_dict["dia_prod"] ** 2.0)
+            area_mem = np.pi * diameter_effective * inp_dict["ln_prod"] * len(df_incell)
+            total_area_incell = area_incell * len(df_incell)
 
-        key = []
-        val = []
-        for k, v in inp_dict.items():
-            key.append(str(k))
-            val.append([str(v)])
+            export_params["N(incell)"] = len(df_incell)
+            export_params["N(outcell)"] = len(df_outcell)
+            export_params["N(slit)"] = len(df_slit)
+            export_params["A(membrane)"] = area_mem
+            export_params["A(incell)"] = total_area_incell
+            export_params["R_A(incell/prod)"] = (total_area_incell / area_prod) * 100.0
 
-        # ax.table(cellText=val, rowLabels=key, loc="center", colWidths=[1, 1])
-        ax.table(cellText=val, rowLabels=key, loc="center")
-        ax.axis("off")
+            # Format the output parameters
+            res = {}
+            for k, v in export_params.items():
+                if re.compile(r"^dia_").match(k) or re.compile(r"^thk_").match(k) or re.compile(r"^ln_").match(k):
+                    res[k] = f"{v:.2f} [mm]"
+                elif re.compile(r"^A\(").match(k):
+                    res[k] = f"{v:.2e} [mm2]"
+                elif re.compile(r"^R_A\(").match(k):
+                    res[k] = f"{v:.1f} [%]"
+                else:
+                    res[k] = f"{v}"
+
+            # Create table
+            key = [k for k in res.keys()]
+            val = [[v] for v in res.values()]
+            tbl = ax.table(cellText=val, rowLabels=key, loc="center")
+            tbl.set_fontsize(16)
+            for _, cell in tbl.get_celld().items():
+                cell.set_height(1 / len(val))
+
+        # figure, Axes
+        # ax1, ax2 = pre(self.inp.dia_prod)
+        ax1, ax2 = pre(self.inp.pitch_slit)
+
+        # product(ax1)
+        dia = self.inp.dia_prod
+        draw_circle(ax1, dia, facecolor="None")
+        draw_circle(ax1, dia, transparency=0.5)
+        dia = self.inp.dia_prod - 2.0 * self.inp.thk_prod
+        draw_circle(ax1, dia, facecolor="None", transparency=1, linestyle="dashed")
+
+        # slit(ax1)
+        coordinate = self.info[self.info["category"] == "slit"][["x", "y"]].to_numpy()
+        for _, y in coordinate:
+            slit_points = vertex_slit(0.5 * self.inp.dia_prod, self.inp.thk_slit, y)
+            draw_polygon(ax1, slit_points, "#97B6D8")
+
+        # incell(ax1)
+        if self.inp.shape_incell == "circle":
+            coordinate = self.info[self.info["category"] == "incell"][["x", "y"]].to_numpy()
+            dia = self.inp.dia_incell - 2.0 * (self.inp.thk_top + self.inp.thk_mid + self.inp.thk_bot)
+            [draw_circle(ax1, diameter=dia, facecolor="#4F81BD", edgecolor="None", x=x, y=y) for x, y in coordinate]
+
+        elif self.inp.shape_incell == "hexagon":
+            condition = (self.info["category"] == "incell") & (self.info["shape"] == "hexagon")
+            hex_coordinates = self.info[condition][["x", "y"]].to_numpy()
+            hex_points = vertex_hex(0.5 * self.inp.dia_incell)
+            [draw_polygon(ax1, hex_points, x, y) for x, y in hex_coordinates]
+
+            condition = (self.info["category"] == "incell") & (self.info["shape"] == "heptagon")
+            hep_info = self.info[condition][["angle", "x", "y"]].to_numpy()
+            for angle, x, y in hep_info:
+                hep_points = vertex_hep(0.5 * self.inp.dia_incell, angle)
+                draw_polygon(ax1, hep_points, x, y)
+
+        # outcell(ax1)
+        coordinate = self.info[self.info["category"] == "outcell"][["x", "y"]].to_numpy()
+        oct_points = vertex_oct(self.inp.thk_cc, self.inp.thk_x1, self.inp.thk_y1)
+        [draw_polygon(ax1, oct_points, x, y, "#76913C") for x, y in coordinate]
+
+        # table(ax2)
+        table(ax2, self.inp, self.info)
 
 
 if __name__ == "__main__":
     main()
-
-# %%
