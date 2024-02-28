@@ -1,8 +1,12 @@
+# %%
 import re
+
 import sys
 from pathlib import Path, WindowsPath
+
 from datetime import datetime
 from typing import Tuple
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -742,3 +746,5 @@ class ResultPost:
 
 if __name__ == "__main__":
     main()
+
+# %%
